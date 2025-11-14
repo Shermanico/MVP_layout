@@ -1,0 +1,26 @@
+# Multi-Drone Coordination System Requirements
+# Python 3.10+ required
+
+# UI Framework
+flet>=0.21.0
+
+# Map visualization
+folium>=0.15.0
+
+# Drone Simulation (Optional - only needed if not using fake telemetry)
+# mavsdk>=1.4.0
+
+# Async support (included in Python 3.10+)
+# asyncio is built-in
+
+# Data handling
+# json is built-in
+# dataclasses is built-in
+
+# Note: For MAVSDK support, install with:
+# pip install mavsdk
+# 
+# For development/testing, fake telemetry is used by default,
+# so MAVSDK is optional.
+
+

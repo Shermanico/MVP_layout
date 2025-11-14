@@ -1,0 +1,14 @@
+{
+  "default_latitude": 37.7749,
+  "default_longitude": -122.4194,
+  "default_zoom": 13,
+  "max_drones": 10,
+  "telemetry_update_interval": 0.5,
+  "use_fake_telemetry": true,
+  "fake_drone_count": 3,
+  "poi_storage_file": "pois.json",
+  "window_width": 1400,
+  "window_height": 900,
+  "window_title": "Sistema de Coordinación Multi-Dron"
+}
+
