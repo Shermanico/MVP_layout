@@ -19,46 +19,128 @@ Un MVP listo para hackathon que coordina y visualiza múltiples drones en tiempo
   - Seguimiento de velocidad vertical
   - Estimaciones de tiempo de vuelo restante
 - **Puntos de Interés (POIs)**: Crear, gestionar y sincronizar POIs en todos los clientes
-- **Arquitectura Ligera**: Diseño simple y modular perfecto para desarrollo en hackathon
+- **Arquitectura Hexagonal**: Diseño modular, escalable y flexible con separación clara de responsabilidades
 - **Modo Telemetría Falsa**: Probar sin configuración MAVSDK usando el simulador Matrice 300 RTK integrado
 - **Compilación Multiplataforma**: Compilar como ejecutable para Windows, macOS, Linux, Android e iOS
 
 ## Arquitectura
 
+El proyecto sigue una **Arquitectura Hexagonal (Ports and Adapters)** que garantiza máxima flexibilidad y escalabilidad:
+
 ```
 project_root/
-├── drones/              # Capa de simulación de drones
-│   ├── simulator.py     # Simulación basada en MAVSDK
-│   ├── fake_generator.py # Generador de telemetría falsa
-│   └── drone_manager.py # Gestiona múltiples drones
+├── domain/                    # 🟢 NÚCLEO - Sin dependencias externas
+│   ├── entities/            # Entidades de negocio
+│   │   ├── drone.py
+│   │   ├── telemetry.py
+│   │   └── poi.py
+│   │
+│   ├── ports/                # Puertos (interfaces)
+│   │   ├── input/            # Puertos de entrada (casos de uso)
+│   │   │   ├── drone_service_port.py
+│   │   │   └── poi_service_port.py
+│   │   │
+│   │   └── output/           # Puertos de salida (repositorios)
+│   │       ├── drone_repository_port.py
+│   │       ├── poi_repository_port.py
+│   │       └── telemetry_repository_port.py
+│   │
+│   └── value_objects/        # Objetos de valor (futuro)
 │
-├── backend/             # Servicios backend
-│   ├── storage.py       # Persistencia de POIs
-│   ├── schemas.py       # Esquemas de datos
-│   └── data_server.py   # Servidor HTTP para datos en tiempo real
+├── application/              # 🟡 CASOS DE USO - Orquestación de lógica
+│   ├── use_cases/            # Casos de uso específicos
+│   │   ├── drone/
+│   │   │   ├── start_drones.py
+│   │   │   ├── stop_drones.py
+│   │   │   └── get_drone_list.py
+│   │   │
+│   │   └── poi/
+│   │       ├── create_poi.py
+│   │       ├── delete_poi.py
+│   │       ├── get_all_pois.py
+│   │       ├── get_pois_by_type.py
+│   │       └── clear_all_pois.py
+│   │
+│   ├── mappers/              # Convertidores entre entidades y DTOs
+│   │   ├── telemetry_mapper.py
+│   │   └── poi_mapper.py
+│   │
+│   └── services/             # Servicios que implementan puertos de entrada
+│       ├── drone_service.py
+│       └── poi_service.py
 │
-├── ui/                  # Capa de interfaz (Flet)
-│   ├── main.py          # Aplicación UI principal
-│   ├── map_view.py      # Componente de mapa interactivo
-│   ├── telemetry_panel.py # Visualización de telemetría
-│   └── poi_manager.py   # UI de gestión de POIs
+├── adapters/                 # 🔵 ADAPTADORES - Implementaciones concretas
+│   ├── input/                # Adaptadores de entrada (Primary)
+│   │   └── flet/             # UI con Flet
+│   │       ├── main_app.py
+│   │       ├── telemetry_panel.py
+│   │       ├── poi_manager.py
+│   │       └── map_view.py
+│   │
+│   └── output/               # Adaptadores de salida (Secondary)
+│       ├── persistence/      # Persistencia
+│       │   └── json_poi_repository.py
+│       │
+│       ├── simulation/       # Simulación de drones
+│       │   ├── fake_drone_adapter.py
+│       │   └── mavsdk_drone_adapter.py
+│       │
+│       └── http/             # Servidor HTTP
+│           └── telemetry_server.py
 │
-├── common/              # Utilidades compartidas
-│   ├── config.py        # Configuración
-│   ├── constants.py     # Constantes
-│   ├── colors.py        # Colores para UI
-│   └── utils.py         # Funciones utilitarias
+├── infrastructure/            # 🔵 INFRAESTRUCTURA - Herramientas y utilidades
+│   ├── config/               # Configuración
+│   │   ├── config.py
+│   │   ├── constants.py
+│   │   ├── colors.py
+│   │   └── utils.py
+│   │
+│   └── shared/               # Utilidades compartidas
 │
-├── main.py              # Punto de entrada de la aplicación
-├── requirements.txt     # Dependencias
-└── flet.json            # Configuración de compilación Flet
+├── app/                      # DTOs (Data Transfer Objects)
+│   └── dtos.py               # TelemetryDTO, POIDTO
+│
+├── main.py                   # Punto de entrada - Wire up (composición)
+├── requirements.txt          # Dependencias
+└── flet.json                 # Configuración de compilación Flet
 ```
+
+### Explicación de la Arquitectura Hexagonal
+
+**Domain (Dominio) - Núcleo del Sistema:**
+- **Entidades**: Representan los conceptos del negocio (Drone, Telemetry, POI)
+- **Puertos de Entrada**: Interfaces que definen qué operaciones puede realizar la aplicación (IDroneService, IPOIService)
+- **Puertos de Salida**: Interfaces que definen cómo se accede a datos externos (IDroneRepository, IPOIRepository, ITelemetryRepository)
+- **Sin dependencias externas**: El dominio no conoce detalles de implementación
+
+**Application (Aplicación) - Casos de Uso:**
+- **Casos de Uso**: Cada caso de uso tiene una responsabilidad única (crear POI, iniciar drones, etc.)
+- **Mappers**: Convierten entre entidades del dominio y DTOs
+- **Servicios**: Orquestan casos de uso e implementan puertos de entrada
+- **Depende solo de Domain**: Solo conoce interfaces, no implementaciones
+
+**Adapters (Adaptadores) - Implementaciones:**
+- **Adaptadores de Entrada (Primary)**: Implementan cómo la aplicación recibe comandos (UI Flet, CLI, REST API)
+- **Adaptadores de Salida (Secondary)**: Implementan cómo la aplicación accede a datos (JSON, Base de Datos, MAVSDK)
+- **Dependen de Domain y Application**: Implementan los puertos definidos en el dominio
+
+**Infrastructure (Infraestructura) - Utilidades:**
+- **Configuración**: Config, constantes, colores, utilidades
+- **Herramientas compartidas**: Logging, validaciones, etc.
+
+**Ventajas de esta Arquitectura:**
+- ✅ **Escalabilidad**: Fácil agregar nuevas funcionalidades sin afectar existentes
+- ✅ **Flexibilidad**: Cambiar implementaciones (JSON → DB, Flet → Web) sin afectar lógica
+- ✅ **Modularidad**: Cada componente tiene responsabilidad única
+- ✅ **Testabilidad**: Fácil testear con mocks de interfaces
+- ✅ **Mantenibilidad**: Código organizado y predecible
+- ✅ **Preparado para el futuro**: Fácil agregar REST API, WebSocket, etc.
 
 ## Instalación
 
 ### Requisitos Previos
 
-- **Python 3.10+** (verificado con Python 3.13.1)
+- **Python 3.10+** (verificado con Python 3.13.1, compatible con Python 3.14)
 - **Sistema operativo**: Windows, macOS o Linux
 
 ### Configuración del Entorno Virtual
@@ -75,7 +157,7 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-**Nota**: En PowerShell, el script helper requiere el operador de punto (`.`) al inicio para ejecutarse en el contexto actual del shell. Ver `ACTIVATE_ENV.md` para más detalles.
+**Nota importante**: En PowerShell, el script helper requiere el operador de punto (`.`) al inicio para ejecutarse en el contexto actual del shell. Esto permite que la activación modifique el entorno del shell actual.
 
 **Windows Command Prompt:**
 ```cmd
@@ -92,6 +174,20 @@ source venv/bin/activate
 ```
 
 **Verificar activación**: Deberías ver `(venv)` al inicio de tu prompt después de activar.
+
+**Solución de problemas de activación:**
+- **Error: "cannot be loaded because running scripts is disabled"**: Ejecuta en PowerShell (como Administrador):
+  ```powershell
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+  ```
+- **Error: "The term 'activate_env.ps1' is not recognized"**: Asegúrate de usar la sintaxis correcta:
+  - PowerShell: `.\activate_env.ps1` o `. .\activate_env.ps1`
+  - CMD: `activate_env.bat`
+- **El entorno virtual no se activa**: Verifica que el directorio `venv` existe:
+  ```powershell
+  Test-Path .\venv\Scripts\Activate.ps1
+  ```
+  Si devuelve `False`, crea el entorno virtual: `python -m venv venv`
 
 ### Instalación de Dependencias
 
@@ -116,6 +212,295 @@ python -c "import flet; import folium; print('✓ Todas las dependencias instala
 
 ## Uso
 
+### Guía Paso a Paso para Ejecutar y Depurar
+
+#### Paso 1: Activar el Entorno Virtual
+
+**Windows PowerShell:**
+```powershell
+# Navegar al directorio del proyecto
+cd "C:\Users\User\Desktop\cursor\New folder\MVP_layout"
+
+# Activar entorno virtual (usa el punto al inicio)
+. .\venv\Scripts\Activate.ps1
+
+# Verificar que está activado (deberías ver (venv) en el prompt)
+```
+
+**Windows Command Prompt:**
+```cmd
+cd "C:\Users\User\Desktop\cursor\New folder\MVP_layout"
+venv\Scripts\activate.bat
+```
+
+**Linux/macOS:**
+```bash
+cd /ruta/al/proyecto
+source venv/bin/activate
+```
+
+#### Paso 2: Verificar Dependencias
+
+```bash
+# Verificar que Flet está instalado
+python -c "import flet; print('✓ Flet instalado')"
+
+# Verificar que Folium está instalado (opcional pero recomendado)
+python -c "import folium; print('✓ Folium instalado')"
+
+# Si falta alguna dependencia, instalar:
+pip install -r requirements.txt
+```
+
+#### Paso 3: Verificar Estructura de Archivos
+
+Verifica que existan los siguientes archivos clave:
+
+```bash
+# Verificar estructura principal
+python -c "
+import os
+dirs = ['domain', 'application', 'adapters', 'infrastructure', 'app']
+for d in dirs:
+    print(f'✓ {d}/' if os.path.exists(d) else f'✗ {d}/ FALTA')
+"
+```
+
+#### Paso 4: Ejecutar la Aplicación
+
+```bash
+# Ejecutar la aplicación
+python main.py
+```
+
+**Lo que debería suceder:**
+1. Verás logs en la consola indicando el proceso de inicialización
+2. Se abrirá una ventana de Flet con la UI
+3. En la consola verás mensajes como:
+   ```
+   INFO - Iniciando aplicación con arquitectura hexagonal...
+   INFO - Configuración cargada: use_fake_telemetry=True, fake_drone_count=6
+   INFO - Creando adaptadores de salida...
+   INFO - Creando casos de uso...
+   INFO - Creando servicios...
+   INFO - Creando adaptador de entrada (UI)...
+   INFO - Iniciando simulación de drones...
+   INFO - Drones iniciados: 6
+   ```
+
+#### Paso 5: Verificar que Todo Funciona
+
+1. **Verifica la UI:**
+   - Deberías ver el mapa a la izquierda
+   - Panel de telemetría a la derecha (arriba)
+   - Panel de POIs a la derecha (abajo)
+
+2. **Verifica los drones:**
+   - En el panel de telemetría deberían aparecer 6 drones
+   - Los datos deberían actualizarse cada 0.5 segundos
+
+3. **Verifica el mapa:**
+   - Si tienes Folium: deberías ver el mapa con iconos de drones
+   - Si no tienes Folium: haz clic en "Abrir Mapa en Navegador"
+
+4. **Verifica el servidor HTTP:**
+   - Abre tu navegador y ve a: `http://localhost:8765/api/data`
+   - Deberías ver un JSON con datos de drones y POIs
+
+### Depuración de Errores Comunes
+
+#### Error 1: "ModuleNotFoundError: No module named 'domain'"
+
+**Causa:** Estás ejecutando desde un directorio incorrecto o el PYTHONPATH no está configurado.
+
+**Solución:**
+```bash
+# Asegúrate de estar en el directorio raíz del proyecto
+cd "C:\Users\User\Desktop\cursor\New folder\MVP_layout"
+
+# Verifica que estás en el lugar correcto
+ls main.py  # Debería existir
+
+# Ejecuta desde aquí
+python main.py
+```
+
+#### Error 2: "ModuleNotFoundError: No module named 'flet'"
+
+**Causa:** Flet no está instalado o el venv no está activado.
+
+**Solución:**
+```bash
+# Activa el venv primero
+. .\venv\Scripts\Activate.ps1  # PowerShell
+# O
+venv\Scripts\activate.bat  # CMD
+
+# Instala dependencias
+pip install -r requirements.txt
+
+# Verifica instalación
+python -c "import flet; print('OK')"
+```
+
+#### Error 3: "ImportError: cannot import name 'IDroneService' from 'domain.ports.input'"
+
+**Causa:** Falta el archivo `__init__.py` o hay un error en la estructura.
+
+**Solución:**
+```bash
+# Verifica que existan los archivos
+ls domain/ports/input/__init__.py
+ls domain/ports/output/__init__.py
+
+# Si no existen, créalos o verifica la estructura
+```
+
+#### Error 4: "AttributeError: 'FakeDroneAdapter' object has no attribute 'telemetry_callback'"
+
+**Causa:** El callback no se está configurando correctamente.
+
+**Solución:** Verifica en `main.py` que el callback se configure ANTES de llamar a `start_drones()`:
+```python
+# En main.py, línea ~135
+drone_repository.telemetry_callback = on_telemetry_update
+```
+
+#### Error 5: "TypeError: 'NoneType' object is not callable"
+
+**Causa:** Un callback o servicio no está inicializado correctamente.
+
+**Solución:** Verifica el orden de inicialización en `main.py`:
+1. Config
+2. Adaptadores de salida
+3. Casos de uso
+4. Servicios
+5. Adaptador de entrada (UI)
+6. Callback
+7. Iniciar drones
+
+#### Error 6: "OSError: [WinError 10048] Only one usage of each socket address"
+
+**Causa:** El puerto 8765 ya está en uso (otra instancia de la app corriendo).
+
+**Solución:**
+```bash
+# En Windows PowerShell:
+netstat -ano | findstr :8765
+# Mata el proceso que está usando el puerto, o cambia el puerto en el código
+```
+
+#### Error 7: Los drones no aparecen en el mapa
+
+**Causa:** El servidor HTTP no está funcionando o el JavaScript no está haciendo polling.
+
+**Solución:**
+1. Verifica que el servidor HTTP esté corriendo: `http://localhost:8765/api/data`
+2. Abre la consola del navegador (F12) y busca errores de JavaScript
+3. Verifica que el polling esté funcionando (deberías ver requests cada 1 segundo)
+
+#### Error 8: "ValueError: El número de drones debe ser mayor a 0"
+
+**Causa:** La configuración tiene `fake_drone_count` en 0 o negativo.
+
+**Solución:**
+```bash
+# Edita config.json o verifica los valores por defecto en infrastructure/config/config.py
+# fake_drone_count debe ser >= 1
+```
+
+### Proceso de Depuración Sistemática
+
+#### 1. Verificar Imports Básicos
+
+```python
+# Crea un script de prueba: test_imports.py
+python -c "
+try:
+    from domain.entities import Drone, Telemetry, POI
+    print('✓ Domain entities')
+except Exception as e:
+    print(f'✗ Domain entities: {e}')
+
+try:
+    from domain.ports.input import IDroneService, IPOIService
+    print('✓ Domain ports input')
+except Exception as e:
+    print(f'✗ Domain ports input: {e}')
+
+try:
+    from domain.ports.output import IDroneRepository, IPOIRepository
+    print('✓ Domain ports output')
+except Exception as e:
+    print(f'✗ Domain ports output: {e}')
+
+try:
+    from application.use_cases.drone.start_drones import StartDronesUseCase
+    print('✓ Use cases')
+except Exception as e:
+    print(f'✗ Use cases: {e}')
+
+try:
+    from adapters.output.persistence import JsonPOIRepository
+    print('✓ Adapters output')
+except Exception as e:
+    print(f'✗ Adapters output: {e}')
+
+try:
+    from adapters.input.flet.main_app import MainApp
+    print('✓ Adapters input')
+except Exception as e:
+    print(f'✗ Adapters input: {e}')
+"
+```
+
+#### 2. Verificar Wire Up Paso a Paso
+
+Agrega logs detallados en `main.py` para ver dónde falla:
+
+```python
+# En main.py, después de cada paso importante:
+logger.info("✓ Paso 1: Config cargada")
+logger.info("✓ Paso 2: Adaptadores de salida creados")
+logger.info("✓ Paso 3: Casos de uso creados")
+# etc.
+```
+
+#### 3. Verificar que los Adaptadores Implementan Correctamente
+
+```python
+# Crea test_adapters.py
+from adapters.output.persistence import JsonPOIRepository
+from adapters.output.simulation import FakeDroneAdapter
+from domain.ports.output import IPOIRepository, IDroneRepository
+
+# Verificar que JsonPOIRepository implementa IPOIRepository
+poi_repo = JsonPOIRepository("test_pois.json")
+assert isinstance(poi_repo, IPOIRepository), "JsonPOIRepository debe implementar IPOIRepository"
+print("✓ JsonPOIRepository implementa IPOIRepository")
+
+# Verificar que FakeDroneAdapter implementa IDroneRepository
+drone_repo = FakeDroneAdapter()
+assert isinstance(drone_repo, IDroneRepository), "FakeDroneAdapter debe implementar IDroneRepository"
+print("✓ FakeDroneAdapter implementa IDroneRepository")
+```
+
+#### 4. Verificar Flujo de Datos
+
+Agrega breakpoints o logs en puntos clave:
+
+```python
+# En adapters/output/simulation/fake_drone_adapter.py
+# En el método _generate_telemetry(), agrega:
+logger.debug(f"Generando telemetría para {self.drone_id}: {normalized}")
+
+# En main.py, en on_telemetry_update:
+logger.debug(f"Telemetría recibida: {telemetry}")
+
+# En adapters/input/flet/main_app.py, en update_telemetry:
+logger.debug(f"Actualizando UI con telemetría: {telemetry.get('drone_id')}")
+```
+
 ### Inicio Rápido (Modo Telemetría Falsa)
 
 Por defecto, la aplicación usa generadores de telemetría falsa, por lo que no se requiere configuración MAVSDK:
@@ -128,7 +513,7 @@ python main.py
 Esto hará:
 - Lanzar la ventana UI de Flet
 - Iniciar servidor HTTP interno en `http://localhost:8765`
-- Iniciar 3 drones simulados (configurable)
+- Iniciar 6 drones simulados (configurable)
 - Mostrar telemetría en tiempo real
 - Permitir creación y gestión de POIs
 - Generar mapa HTML interactivo con drones y POIs que se actualiza automáticamente
@@ -169,7 +554,7 @@ Crear un archivo `config.json` para personalizar la configuración:
   "max_drones": 10,
   "telemetry_update_interval": 0.5,
   "use_fake_telemetry": true,
-  "fake_drone_count": 3,
+  "fake_drone_count": 6,
   "poi_storage_file": "pois.json",
   "window_width": 1400,
   "window_height": 900,
@@ -199,9 +584,10 @@ Cada dron muestra:
 El sistema incluye un mapa interactivo que muestra:
 
 - **Marcadores de Drones**:
+  - Iconos SVG que rotan según el rumbo del dron
   - Color dinámico según nivel de batería (verde >50%, naranja 20-50%, rojo <20%)
   - Popup con información detallada (ID, batería, altitud, velocidad, rumbo)
-  - Actualización en tiempo real sin recargar la página (polling cada 0.5s)
+  - Actualización en tiempo real sin recargar la página (polling cada 1s)
 
 - **Marcadores de POIs**:
   - Colores por tipo (Peligro: rojo, Objetivo: azul, Punto de Control: amarillo, Zona de Aterrizaje: verde)
@@ -235,8 +621,48 @@ Crear POIs con:
 - Telemetría se actualiza cada 0.5 segundos (configurable)
 - Cambios de POI se transmiten inmediatamente
 - Mapa HTML se actualiza incrementalmente sin recargar la página
-- JavaScript hace polling al servidor HTTP cada 0.5 segundos
+- JavaScript hace polling al servidor HTTP cada 1 segundo (throttled)
 - Soporte multi-cliente vía sistema pub/sub de Flet
+
+## Compatibilidad con Otros Drones
+
+### AUTEL EVO II
+
+**Respuesta corta**: Sí, este MVP **puede ser usado con AUTEL EVO II**, pero requiere modificaciones menores en el código de simulación.
+
+**Comparación de especificaciones:**
+
+| Característica | Matrice 300 RTK (Actual) | AUTEL EVO II Pro |
+|----------------|--------------------------|------------------|
+| Velocidad máxima | 23 m/s (82.8 km/h) | ~20 m/s (72 km/h) |
+| Altitud máxima | 5000m AGL | 8000m AGL |
+| Tiempo de vuelo | ~55 minutos | ~40 minutos |
+| Posicionamiento | RTK (centímetro) | GPS/GLONASS (RTK opcional) |
+| Protocolo | MAVLink (MAVSDK) | MAVLink (si está configurado) |
+
+**Compatibilidad del MVP:**
+- ✅ **Arquitectura General**: Compatible sin cambios
+- ✅ **Componentes UI**: Compatible sin cambios
+- ✅ **Backend y Almacenamiento**: Compatible sin cambios
+- ⚠️ **Simulación Falsa**: Requiere modificar constantes en el adaptador de simulación
+
+**Solución rápida para AUTEL EVO II:**
+
+Modificar las constantes en el adaptador de simulación (`adapters/output/simulation/fake_drone_adapter.py`):
+```python
+MAX_SPEED = 20.0  # En lugar de 23.0
+MAX_ALTITUDE = 8000.0  # En lugar de 5000.0
+MAX_FLIGHT_TIME = 40.0 * 60.0  # En lugar de 55.0 * 60.0
+self.rtk_fix = False  # Si no tiene RTK
+```
+
+**Solución recomendada (futuro):**
+
+Implementar un sistema de perfiles de dron que permita seleccionar el tipo de dron desde la configuración. Esto haría el MVP verdaderamente multi-dron y facilitaría futuras integraciones.
+
+**Esfuerzo estimado:**
+- **Cambios mínimos**: 1-2 horas (ajustar constantes)
+- **Solución completa**: 4-6 horas (sistema de perfiles)
 
 ## Compilación Multiplataforma
 
@@ -266,11 +692,6 @@ flet build windows
 - Ejecutable independiente (no requiere Python instalado)
 - Tamaño aproximado: 50-100 MB
 
-**Script rápido:**
-```powershell
-.\build_windows.ps1
-```
-
 ### macOS
 
 **Requisitos Previos:**
@@ -291,11 +712,6 @@ flet build macos
 
 **Resultado:**
 - Paquete `.app` en la carpeta `dist/`
-
-**Script rápido:**
-```bash
-./build_macos.sh
-```
 
 ### Linux
 
@@ -321,11 +737,6 @@ flet build linux
 
 **Resultado:**
 - Ejecutable independiente en la carpeta `dist/`
-
-**Script rápido:**
-```bash
-./build_linux.sh
-```
 
 ### Android
 
@@ -383,17 +794,66 @@ Edita el archivo `flet.json` para personalizar:
 
 ### Estructura del Proyecto
 
-- **drones/**: Simulación de drones y manejo de telemetría
-- **backend/**: Almacenamiento de POIs, gestión de datos y servidor HTTP
-- **ui/**: Interfaz de usuario basada en Flet
-- **common/**: Configuración y utilidades compartidas
+- **domain/**: Entidades del dominio, puertos (interfaces)
+- **application/**: Casos de uso, mappers, servicios
+- **adapters/**: Implementaciones concretas (UI, repositorios, simulación)
+- **infrastructure/**: Configuración y utilidades
+- **app/**: DTOs para transferencia de datos
 
 ### Agregar Nuevas Características
 
-1. **Nuevos Comandos de Dron**: Extender `DroneManager.send_command_to_drone()`
-2. **Nuevos Tipos de POI**: Agregar al enum `POIType` en `common/constants.py`
-3. **Componentes UI**: Agregar nuevos componentes en el directorio `ui/`
-4. **Campos de Telemetría**: Extender `normalize_telemetry()` en `common/utils.py`
+1. **Nuevos Casos de Uso**: Crear en `application/use_cases/`
+2. **Nuevos Tipos de POI**: Agregar al enum `POIType` en `infrastructure/config/constants.py`
+3. **Nuevos Adaptadores**: Crear en `adapters/input/` o `adapters/output/`
+4. **Campos de Telemetría**: Extender entidad `Telemetry` en `domain/entities/telemetry.py`
+
+## Ejecución y Depuración
+
+### Guía Rápida de Ejecución
+
+1. **Activar entorno virtual:**
+   ```powershell
+   . .\venv\Scripts\Activate.ps1
+   ```
+
+2. **Verificar dependencias:**
+   ```bash
+   python -c "import flet; print('✓ Flet OK')"
+   ```
+
+3. **Ejecutar aplicación:**
+   ```bash
+   python main.py
+   ```
+
+4. **Verificar funcionamiento:**
+   - Ventana Flet debe abrirse
+   - Panel de telemetría muestra 6 drones
+   - Servidor HTTP en `http://localhost:8765/api/data`
+
+### Depuración de Errores Comunes
+
+**Error: "ModuleNotFoundError: No module named 'domain'"**
+- **Solución:** Asegúrate de estar en el directorio raíz del proyecto donde está `main.py`
+
+**Error: "ImportError: cannot import name 'IDroneService'"**
+- **Solución:** Verifica que existan los archivos `__init__.py` en `domain/ports/input/` y `domain/ports/output/`
+
+**Error: "AttributeError: 'FakeDroneAdapter' object has no attribute 'telemetry_callback'"**
+- **Solución:** En `main.py`, configura el callback ANTES de llamar a `start_drones()`:
+  ```python
+  drone_repository.telemetry_callback = on_telemetry_update
+  ```
+
+**Error: "OSError: [WinError 10048] Only one usage of each socket address"**
+- **Solución:** El puerto 8765 está ocupado. Mata el proceso anterior o cambia el puerto.
+
+**Los drones no aparecen:**
+- Verifica logs en consola para ver si hay errores
+- Verifica que el servidor HTTP esté corriendo: `http://localhost:8765/api/data`
+- Abre la consola del navegador (F12) para ver errores de JavaScript
+
+Para más detalles, consulta la sección completa de depuración más abajo.
 
 ## Solución de Problemas
 
@@ -478,6 +938,7 @@ Este proyecto está diseñado para uso en hackathon. Siéntete libre de modifica
 - El sistema está diseñado para ser fácilmente extensible
 - El mapa HTML se guarda en un archivo temporal que se limpia al cerrar la aplicación
 - El servidor HTTP interno se ejecuta en un hilo separado y se detiene automáticamente al cerrar la aplicación
+- La arquitectura hexagonal está preparada para Python 3.14 (sin GIL)
 
 ## Mejoras Futuras
 
@@ -489,6 +950,9 @@ Este proyecto está diseñado para uso en hackathon. Siéntete libre de modifica
 - Exportar/importar datos de POI
 - Rutas y trayectorias de drones en el mapa
 - Capas toggleables (mostrar/ocultar drones/POIs)
+- Sistema de perfiles de dron para soporte multi-dron
+- REST API para integración externa
+- CLI para operaciones desde terminal
 
 ## Referencias
 
@@ -497,3 +961,4 @@ Este proyecto está diseñado para uso en hackathon. Siéntete libre de modifica
 - [Folium Documentation](https://python-visualization.github.io/folium/)
 - [Leaflet.js Documentation](https://leafletjs.com/)
 - [MAVSDK-Python Documentation](https://mavsdk.mavlink.io/)
+- [Hexagonal Architecture (Alistair Cockburn)](https://alistair.cockburn.us/hexagonal-architecture/)
