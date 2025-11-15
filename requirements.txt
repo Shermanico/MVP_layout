@@ -1,5 +1,5 @@
 # Multi-Drone Coordination System Requirements
-# Python 3.10+ required
+# Python 3.10+ required (recomendado: Python 3.11 o 3.12 para mejor compatibilidad)
 
 # UI Framework
 # Install with all dependencies (desktop, web, CLI) to avoid auto-install issues
@@ -7,6 +7,9 @@ flet[all]>=0.21.0
 
 # Map visualization
 folium>=0.15.0
+
+# Nota: Si usas Python 3.15+ y tienes problemas con pydantic-core,
+# considera usar Python 3.11 o 3.12, o instala Rust desde https://rustup.rs/
 
 # Drone Simulation (Optional - only needed if not using fake telemetry)
 # mavsdk>=1.4.0
