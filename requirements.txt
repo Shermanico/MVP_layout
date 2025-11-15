@@ -2,7 +2,8 @@
 # Python 3.10+ required
 
 # UI Framework
-flet>=0.21.0
+# Install with all dependencies (desktop, web, CLI) to avoid auto-install issues
+flet[all]>=0.21.0
 
 # Map visualization
 folium>=0.15.0

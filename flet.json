@@ -1,0 +1,10 @@
+{
+  "name": "Multi-Drone Coordination System",
+  "version": "1.0.0",
+  "description": "Sistema de coordinación multi-dron para hackathon",
+  "author": "Tu Nombre",
+  "main": "main.py",
+  "assets_dir": "assets",
+  "icon": "assets/icon.png"
+}
+

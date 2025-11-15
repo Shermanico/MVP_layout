@@ -19,7 +19,8 @@ class POIManager:
     def __init__(
         self,
         on_create_poi: Optional[Callable[[float, float, str, str], None]] = None,
-        on_delete_poi: Optional[Callable[[str], None]] = None
+        on_delete_poi: Optional[Callable[[str], None]] = None,
+        page_height: int = 900
     ):
         """
         Inicializa el gestor de POIs.
@@ -27,30 +28,36 @@ class POIManager:
         Args:
             on_create_poi: Callback cuando se crea un POI (lat, lon, type, description)
             on_delete_poi: Callback cuando se elimina un POI (poi_id)
+            page_height: Altura de la página para calcular altura del scroll
         """
         self.on_create_poi = on_create_poi
         self.on_delete_poi = on_delete_poi
+        self.page_height = page_height
         self.pois: Dict[str, Dict[str, Any]] = {}
-        self.poi_list_view = ft.ListView(expand=True, spacing=5)
+        # Crear Column con scroll para contenido scrolleable
+        self.poi_list_view = ft.Column(
+            controls=[],
+            spacing=5,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
         self.poi_panel = self._create_panel()
     
     def _create_panel(self) -> ft.Container:
         """Crea el panel de gestión de POIs."""
-        # Traducciones de tipos de POI
-        poi_type_names = {
-            "hazard": "PELIGRO",
-            "target": "OBJETIVO",
-            "checkpoint": "PUNTO DE CONTROL",
-            "landing_zone": "ZONA DE ATERRIZAJE",
-            "other": "OTRO"
-        }
-        
+        # Calcular altura disponible: altura de ventana - padding - encabezado - dividers - botón
+        # Aproximadamente: altura total / 2 (mitad para telemetría, mitad para POIs) - espacio fijo
+        scroll_height = max(250, (self.page_height - 250) // 2)
         return ft.Container(
             content=ft.Column(
                 controls=[
                     ft.Text("Puntos de Interés", size=18, weight=ft.FontWeight.BOLD),
                     ft.Divider(),
-                    self.poi_list_view,
+                    ft.Container(
+                        content=self.poi_list_view,
+                        height=scroll_height,  # Altura calculada para habilitar scroll
+                        expand=False,
+                    ),
                     ft.Divider(),
                     ft.ElevatedButton(
                         "Limpiar Todos los POIs",
@@ -58,12 +65,13 @@ class POIManager:
                         color=RED
                     ),
                 ],
-                spacing=10,
+                spacing=5,
                 expand=True,
             ),
             padding=10,
             width=300,
             bgcolor=SURFACE_VARIANT,
+            expand=True,
         )
     
     def _create_poi_card(self, poi: Dict[str, Any]) -> ft.Card:

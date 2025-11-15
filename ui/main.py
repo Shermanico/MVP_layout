@@ -35,10 +35,11 @@ class MainApp:
         self.page: Optional[ft.Page] = None
         
         # Componentes UI
-        self.telemetry_panel = TelemetryPanel()
+        self.telemetry_panel = TelemetryPanel(page_height=self.config.window_height)
         self.poi_manager = POIManager(
             on_create_poi=self._on_create_poi,
-            on_delete_poi=self._on_delete_poi
+            on_delete_poi=self._on_delete_poi,
+            page_height=self.config.window_height
         )
         
         # Marcadores de mapa (simplificado - usando marcadores Flet)
@@ -89,11 +90,18 @@ class MainApp:
         
         return ft.Row(
             controls=[
-                map_view,  # El mapa ocupa la mayor parte del espacio
-                side_panel,  # Panel lateral con telemetría y POIs
+                ft.Container(
+                    content=map_view,
+                    expand=True,
+                ),
+                ft.Container(
+                    content=side_panel,
+                    width=320,
+                ),
             ],
             expand=True,
             spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.START,
         )
     
     def _create_map_view(self) -> ft.Container:
@@ -171,9 +179,15 @@ class MainApp:
         return ft.Container(
             content=ft.Column(
                 controls=[
-                    self.telemetry_panel.get_panel(),
+                    ft.Container(
+                        content=self.telemetry_panel.get_panel(),
+                        expand=True,
+                    ),
                     ft.Divider(),
-                    self.poi_manager.get_panel(),
+                    ft.Container(
+                        content=self.poi_manager.get_panel(),
+                        expand=True,
+                    ),
                 ],
                 spacing=10,
                 expand=True,
@@ -181,6 +195,7 @@ class MainApp:
             width=320,
             bgcolor=SURFACE,
             padding=0,
+            expand=True,
         )
     
     def _create_poi_dialog(self, lat: float, lon: float):

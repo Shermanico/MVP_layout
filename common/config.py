@@ -21,7 +21,7 @@ class Config:
     
     # Configuración de simulación
     use_fake_telemetry: bool = True  # Establecer a False para usar MAVSDK
-    fake_drone_count: int = 3
+    fake_drone_count: int = 6
     
     # Almacenamiento
     poi_storage_file: str = "pois.json"

@@ -16,28 +16,55 @@ class TelemetryPanel:
     Componente UI para mostrar telemetría de drones.
     """
     
-    def __init__(self):
-        """Inicializa el panel de telemetría."""
+    def __init__(self, page_height: int = 900):
+        """
+        Inicializa el panel de telemetría.
+        
+        Args:
+            page_height: Altura de la página para calcular altura del scroll
+        """
         self.drones: Dict[str, Dict[str, Any]] = {}
-        self.drone_list_view = ft.ListView(expand=True, spacing=5)
+        self.page_height = page_height
+        # Crear Column con scroll para contenido scrolleable
+        self.drone_list_view = ft.Column(
+            controls=[],
+            spacing=5,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
         self.panel = self._create_panel()
     
     def _create_panel(self) -> ft.Container:
         """Crea el panel de telemetría."""
+        # Crear el texto de drones activos como atributo para poder actualizarlo
+        self.active_drones_text = ft.Text(f"Drones Activos: {len(self.drones)}", size=12, color=GREY_600)
         return ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Telemetría de Drones", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Divider(),
-                    ft.Text(f"Drones Activos: {len(self.drones)}", size=12, color=GREY_600),
-                    self.drone_list_view,
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Text("Telemetría de Drones", size=18, weight=ft.FontWeight.BOLD),
+                                ft.Divider(),
+                                self.active_drones_text,
+                            ],
+                            spacing=5,
+                            tight=True,
+                        ),
+                        padding=ft.padding.only(bottom=5),
+                    ),
+                    ft.Container(
+                        content=self.drone_list_view,
+                        expand=True,  # Usar expand=True para ocupar todo el espacio disponible
+                    ),
                 ],
-                spacing=10,
+                spacing=0,
                 expand=True,
             ),
             padding=10,
             width=300,
             bgcolor=SURFACE_VARIANT,
+            expand=True,
         )
     
     def _create_drone_card(self, telemetry: Dict[str, Any]) -> ft.Card:
@@ -195,22 +222,21 @@ class TelemetryPanel:
         
         logger.debug(f"Refrescando lista de drones: {len(self.drones)} drones")
         
+        # Limpiar y actualizar el ListView
         self.drone_list_view.controls.clear()
         for telemetry in self.drones.values():
             drone_id = telemetry.get("drone_id", "UNKNOWN")
             self.drone_list_view.controls.append(self._create_drone_card(telemetry))
             logger.debug(f"Agregada tarjeta para {drone_id}")
         
-        # Actualizar contador de drones activos
-        if len(self.panel.content.controls) > 2:
-            self.panel.content.controls[2] = ft.Text(
-                f"Drones Activos: {len(self.drones)}",
-                size=12,
-                color=GREY_600,
-            )
+        # Actualizar contador de drones activos (usar el atributo en lugar de buscar en controls)
+        if hasattr(self, 'active_drones_text'):
+            self.active_drones_text.value = f"Drones Activos: {len(self.drones)}"
         
         try:
             self.drone_list_view.update()
+            if hasattr(self, 'active_drones_text'):
+                self.active_drones_text.update()
             self.panel.update()
             logger.debug(f"UI actualizada, drones en lista: {[d.get('drone_id') for d in self.drones.values()]}")
         except Exception as e:

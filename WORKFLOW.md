@@ -1,13 +1,14 @@
 # Explicación Completa del Flujo de Trabajo - Sistema de Coordinación Multi-Dron
 
-Este documento explica el flujo de trabajo completo entre todos los archivos de script del sistema, incluyendo la integración del mapa interactivo.
+Este documento explica el flujo de trabajo completo entre todos los archivos de script del sistema, incluyendo la integración del mapa interactivo con actualizaciones incrementales.
 
 ## 📋 Tabla de Contenidos
 1. [Flujo de Inicio de la Aplicación](#1-flujo-de-inicio-de-la-aplicación)
 2. [Flujo de Datos en Tiempo de Ejecución](#2-flujo-de-datos-en-tiempo-de-ejecución)
-3. [Flujo del Mapa Interactivo](#3-flujo-del-mapa-interactivo)
+3. [Flujo del Mapa Interactivo con Actualizaciones Incrementales](#3-flujo-del-mapa-interactivo-con-actualizaciones-incrementales)
 4. [Interacciones de Componentes](#4-interacciones-de-componentes)
 5. [Diagramas de Flujo de Datos](#5-diagramas-de-flujo-de-datos)
+6. [Arquitectura del Servidor HTTP](#6-arquitectura-del-servidor-http)
 
 ---
 
@@ -64,6 +65,7 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │    - Establece título y tamaño de ventana                   │
 │    - Crea layout principal (mapa + panel lateral)          │
 │    - Inicializa MapView (con Folium o fallback)            │
+│    - MapView inicia TelemetryServer en puerto 8765         │
 │    - Carga POIs existentes del almacenamiento               │
 │    - Configura suscripciones pub/sub                       │
 └──────────────────────┬──────────────────────────────────────┘
@@ -165,9 +167,9 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │    │   - Muestra: posición, batería, altitud                │
 │    │                                                          │
 │    └─> map_view.update_drone(telemetry)                    │
-│        - Actualiza marcador de dron en mapa HTML            │
-│        - Regenera archivo HTML con Folium                   │
-│        - Actualiza vista alternativa si WebView no disponible│
+│        - Actualiza TelemetryServer con nueva telemetría     │
+│        - NO regenera HTML (actualizaciones incrementales)    │
+│        - JavaScript en el mapa hace polling al servidor     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -209,8 +211,8 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │    │   - Actualiza marcadores POI en vista de mapa           │
 │    │                                                          │
 │    └─> map_view.add_poi(poi)                                │
-│        - Agrega marcador POI al mapa HTML                   │
-│        - Regenera archivo HTML con Folium                   │
+│        - Actualiza TelemetryServer con nuevo POI             │
+│        - JavaScript en el mapa detecta el cambio vía polling│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -248,14 +250,14 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │    │   - Actualiza vista de mapa                             │
 │    │                                                          │
 │    └─> map_view.remove_poi(poi_id)                          │
-│        - Elimina marcador POI del mapa HTML                 │
-│        - Regenera archivo HTML                              │
+│        - Elimina POI del TelemetryServer                     │
+│        - JavaScript en el mapa detecta el cambio vía polling│
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Flujo del Mapa Interactivo
+## 3. Flujo del Mapa Interactivo con Actualizaciones Incrementales
 
 ### Inicialización del Mapa
 
@@ -274,26 +276,35 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 ┌─────────────────────────────────────────────────────────────┐
 │ ui/map_view.py::MapView.__init__()                          │
 │                                                              │
-│ 1. _create_map()                                            │
+│ 1. Iniciar TelemetryServer                                  │
+│    self.telemetry_server = TelemetryServer(port=8765)     │
+│    self.telemetry_server.start()                            │
+│    - Servidor HTTP se ejecuta en hilo separado             │
+│    - Endpoint: http://localhost:8765/api/data             │
+│                                                              │
+│ 2. _create_map()                                            │
 │    ├─> Intenta usar Folium (si está disponible)            │
 │    │   - Crea mapa Folium con OpenStreetMap                │
+│    │   - Agrega JavaScript para polling                    │
 │    │   - Guarda en archivo HTML temporal                   │
 │    │                                                          │
-│    └─> Si no hay Folium: _create_html_map()                │
+│    └─> Si no hay Folium: _generate_map_html()               │
 │        - Genera HTML con Leaflet.js desde CDN               │
+│        - Incluye JavaScript para polling                    │
 │        - Guarda en archivo HTML temporal                     │
 │                                                              │
-│ 2. _create_webview() o _create_fallback_view()             │
+│ 3. _create_webview() o _create_fallback_view()             │
 │    ├─> En Windows: Usa fallback directamente               │
 │    │   - Vista alternativa con lista de drones/POIs        │
 │    │   - Botón para abrir mapa en navegador                 │
 │    │                                                          │
 │    └─> En otras plataformas: Intenta WebView               │
 │        - Carga archivo HTML en WebView de Flet              │
+│        - JavaScript comienza polling automáticamente         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Actualización del Mapa con Telemetría
+### Actualización del Mapa con Telemetría (Actualizaciones Incrementales)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -301,28 +312,50 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │                                                              │
 │ 1. Almacenar telemetría en self.drones[drone_id]           │
 │                                                              │
-│ 2. _update_map_html()                                       │
-│    ├─> Si Folium disponible:                                │
-│    │   - Crear nuevo mapa Folium                            │
-│    │   - _add_drones_to_folium_map()                        │
-│    │     * Para cada dron: crear Marker con color según     │
-│    │       batería, popup con información                    │
-│    │   - _add_pois_to_folium_map()                          │
-│    │     * Para cada POI: crear Marker con color según tipo │
-│    │   - Guardar en archivo HTML                            │
+│ 2. Actualizar TelemetryServer                               │
+│    self.telemetry_server.update_telemetry(telemetry)       │
+│    - Actualiza almacén de datos en memoria                  │
+│    - NO regenera HTML (evita recargas)                       │
+│                                                              │
+│ 3. JavaScript en el mapa (polling cada 0.5s)             │
+│    - Hace fetch a http://localhost:8765/api/data           │
+│    - Recibe JSON con drones y POIs actualizados            │
+│    - Actualiza marcadores existentes usando Leaflet.js      │
+│      * setLatLng() para posición                           │
+│      * setPopupContent() para información                  │
+│      * setIcon() para color según batería                   │
+│    - Crea nuevos marcadores si el dron es nuevo            │
+│    - Preserva zoom y centro usando localStorage             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Flujo de Polling JavaScript en el Mapa
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ JavaScript en mapa HTML (cada 0.5 segundos)               │
+│                                                              │
+│ 1. setInterval(updateFromServer, 500)                      │
+│                                                              │
+│ 2. updateFromServer()                                       │
+│    ├─> fetch('http://localhost:8765/api/data')             │
+│    │   - Solicita datos actualizados                        │
 │    │                                                          │
-│    └─> Si no hay Folium:                                    │
-│        - _generate_map_html()                                │
-│        - Generar HTML con JavaScript puro                    │
-│        - Guardar en archivo HTML                             │
+│    ├─> Recibe JSON: {drones: {...}, pois: {...}}          │
+│    │                                                          │
+│    ├─> Para cada dron en data.drones:                      │
+│    │   - Si marcador existe: actualizar posición/icono      │
+│    │   - Si no existe: crear nuevo marcador                 │
+│    │   - Actualizar popup con nueva información             │
+│    │                                                          │
+│    └─> Para cada POI en data.pois:                         │
+│        - Si marcador existe: actualizar posición            │
+│        - Si no existe: crear nuevo marcador                  │
+│        - Actualizar popup con información                   │
 │                                                              │
-│ 3. _reload_map() (si WebView disponible)                    │
-│    - Actualizar URL del WebView con timestamp               │
-│    - Forzar recarga del mapa                                │
-│                                                              │
-│ 4. _update_fallback_view() (si fallback activo)             │
-│    - Actualizar lista de drones en vista alternativa        │
-│    - Actualizar lista de POIs en vista alternativa          │
+│ 3. Preservar estado del mapa                                │
+│    - Guardar zoom y centro en localStorage                 │
+│    - Restaurar al cargar la página                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -340,8 +373,9 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │ 1. Verificar que archivo HTML existe                        │
 │                                                              │
 │ 2. webbrowser.open(file_url)                                │
-│    - Abre archivo HTML en navegador predeterminado          │
+│    - Abre archivo HTML en navegador predeterminado        │
 │    - Muestra mapa interactivo con todos los marcadores      │
+│    - JavaScript comienza polling automáticamente             │
 │    - Usuario puede hacer zoom, pan, ver popups              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -362,6 +396,16 @@ main.py
     ├── ui/poi_manager.py (POIManager)
     ├── ui/map_view.py (MapView)
     └── backend/storage.py (POIStorage - pasado como parámetro)
+
+ui/map_view.py
+├── backend/data_server.py (TelemetryServer)
+├── common/constants.py (POIType)
+├── common/colors.py (Colores)
+└── folium (opcional, para mapas)
+
+backend/data_server.py
+├── http.server (HTTPServer, BaseHTTPRequestHandler)
+└── threading (Thread)
 
 drones/drone_manager.py
 ├── common/config.py (Config)
@@ -384,11 +428,6 @@ ui/main.py
 ├── ui/telemetry_panel.py (TelemetryPanel)
 ├── ui/poi_manager.py (POIManager)
 └── ui/map_view.py (MapView)
-
-ui/map_view.py
-├── common/constants.py (POIType)
-├── common/colors.py (Colores)
-└── folium (opcional, para mapas)
 ```
 
 ### Clases Clave y Sus Responsabilidades
@@ -407,14 +446,22 @@ ui/map_view.py
   - Guardar POIs en archivo JSON al cambiar
   - Operaciones CRUD para POIs
 
-#### 3. **DroneManager** (`drones/drone_manager.py`)
+#### 3. **TelemetryServer** (`backend/data_server.py`)
+- **Propósito**: Servidor HTTP para servir datos de telemetría y POIs en tiempo real
+- **Responsabilidades**:
+  - Ejecutar servidor HTTP en hilo separado (puerto 8765)
+  - Mantener almacén de datos en memoria (drones y POIs)
+  - Servir datos JSON vía endpoint `/api/data`
+  - Permitir actualizaciones incrementales sin regenerar HTML
+
+#### 4. **DroneManager** (`drones/drone_manager.py`)
 - **Propósito**: Orquesta múltiples simulaciones de drones
 - **Responsabilidades**:
   - Crear y gestionar múltiples instancias de drones
   - Enrutar actualizaciones de telemetría a UI
   - Manejar ciclo de vida de drones (iniciar/detener)
 
-#### 4. **FakeTelemetryGenerator** (`drones/fake_generator.py`)
+#### 5. **FakeTelemetryGenerator** (`drones/fake_generator.py`)
 - **Propósito**: Simula comportamiento del dron Matrice 300 RTK
 - **Responsabilidades**:
   - Generar datos de telemetría realistas
@@ -422,7 +469,7 @@ ui/map_view.py
   - Actualizar posición, batería, estado
   - Llamar callback con actualizaciones de telemetría
 
-#### 5. **MainApp** (`ui/main.py`)
+#### 6. **MainApp** (`ui/main.py`)
 - **Propósito**: Coordina todos los componentes UI
 - **Responsabilidades**:
   - Configurar layout de página Flet
@@ -430,25 +477,27 @@ ui/map_view.py
   - Actualizar UI con datos de telemetría
   - Coordinar entre componentes UI (incluyendo MapView)
 
-#### 6. **TelemetryPanel** (`ui/telemetry_panel.py`)
+#### 7. **TelemetryPanel** (`ui/telemetry_panel.py`)
 - **Propósito**: Mostrar telemetría de drones en UI
 - **Responsabilidades**:
   - Mostrar telemetría en tiempo real para cada dron
   - Actualizar tarjetas de drones con nuevos datos
   - Mostrar batería, altitud, velocidad, estado RTK
 
-#### 7. **POIManager** (`ui/poi_manager.py`)
+#### 8. **POIManager** (`ui/poi_manager.py`)
 - **Propósito**: Gestionar visualización e interacciones de POIs
 - **Responsabilidades**:
   - Mostrar lista de POIs
   - Manejar creación de tarjetas de POI
   - Activar callbacks de eliminación de POI
 
-#### 8. **MapView** (`ui/map_view.py`)
-- **Propósito**: Gestionar visualización de mapa interactivo
+#### 9. **MapView** (`ui/map_view.py`)
+- **Propósito**: Gestionar visualización de mapa interactivo con actualizaciones incrementales
 - **Responsabilidades**:
   - Crear mapa HTML con Folium o JavaScript puro
-  - Actualizar marcadores de drones y POIs
+  - Iniciar y gestionar TelemetryServer
+  - Actualizar TelemetryServer con nuevas telemetrías y POIs
+  - Generar HTML con JavaScript para polling
   - Gestionar vista alternativa cuando WebView no está disponible
   - Proporcionar botón para abrir mapa en navegador
 
@@ -499,6 +548,7 @@ ui/map_view.py
 │  │  │  - Mapa HTML (Folium/Leaflet)          │     │      │
 │  │  │  - Marcadores de drones                 │     │      │
 │  │  │  - Marcadores POI                       │     │      │
+│  │  │  - JavaScript polling (cada 0.5s)       │     │      │
 │  │  │  - Vista alternativa (si WebView no     │     │      │
 │  │  │    disponible)                          │     │      │
 │  │  └──────────────────────────────────────────┘     │      │
@@ -530,9 +580,29 @@ ui/map_view.py
 │  └──────────────┘    └──────────────┘                       │
 │                                                               │
 └───────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│              CAPA DE SERVIDOR HTTP (NUEVO)                   │
+│                                                               │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  backend/data_server.py::TelemetryServer            │     │
+│  │  - Servidor HTTP en hilo separado                  │     │
+│  │  - Puerto: 8765                                     │     │
+│  │  - Endpoint: /api/data                              │     │
+│  │  - Almacén en memoria (drones y POIs)              │     │
+│  │  - Sincronización thread-safe                       │     │
+│  └────────────────────────────────────────────────────┘     │
+│                                                               │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │  JavaScript en mapa HTML                           │     │
+│  │  - Polling cada 0.5s a /api/data                  │     │
+│  │  - Actualiza marcadores Leaflet incrementalmente   │     │
+│  │  - Preserva estado del mapa (localStorage)         │     │
+│  └────────────────────────────────────────────────────┘     │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-### Ciclo de Actualización de Telemetría (Bucle Continuo)
+### Ciclo de Actualización de Telemetría (Bucle Continuo con Servidor HTTP)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -550,7 +620,6 @@ ui/map_view.py
 │                                                              │
 │    3. callback(telemetry) ────────────────────────────────┐│
 └────────────────────────────────────────────────────────────┘│
-                                                               │
                                                                │
 ┌─────────────────────────────────────────────────────────────┐│
 │  DroneManager                                                ││
@@ -577,21 +646,101 @@ ui/map_view.py
 │    │                                                         ││││
 │    ├─> _update_map_drones()                                 ││││
 │    │   - Actualizar posiciones de drones en mapa             ││││
-│    │   - Refrescar vista de mapa                             ││││
 │    │                                                         ││││
 │    └─> map_view.update_drone()                             ││││
-│        - Regenerar mapa HTML con Folium                     ││││
-│        - Actualizar marcadores de drones                    ││││
-│        - Actualizar vista alternativa si aplica              ││││
+│        - Actualizar TelemetryServer                         ││││
+│        - NO regenerar HTML (actualizaciones incrementales)   ││││
 └──────────────────────────────────────────────────────────────┘│││
                                                                   │││
+┌─────────────────────────────────────────────────────────────┐│││
+│  TelemetryServer (Hilo Separado)                            ││││
+│                                                              ││││
+│  update_telemetry(telemetry)                                 ││││
+│    - Almacenar en data_store.drones[drone_id]              ││││
+│    - Thread-safe con lock                                   ││││
+└──────────────────────────────────────────────────────────────┘│││
+                                                                  │││
+┌─────────────────────────────────────────────────────────────┐│││
+│  JavaScript en Mapa HTML (Polling cada 0.5s)                ││││
+│                                                              ││││
+│  updateFromServer()                                          ││││
+│    ├─> fetch('http://localhost:8765/api/data')              ││││
+│    │   - Obtener datos actualizados                         ││││
+│    │                                                         ││││
+│    ├─> Recibir JSON: {drones: {...}, pois: {...}}         ││││
+│    │                                                         ││││
+│    └─> Actualizar marcadores Leaflet                       ││││
+│        - setLatLng() para posición                          ││││
+│        - setPopupContent() para información                 ││││
+│        - setIcon() para color según batería                 ││││
+│        - Crear nuevos marcadores si es necesario            ││││
+└──────────────────────────────────────────────────────────────┘│││
                                                                   └┴┴┘
                                                               (Bucle)
 ```
 
 ---
 
-## 6. Patrones de Diseño Clave
+## 6. Arquitectura del Servidor HTTP
+
+### Componentes del Servidor HTTP
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  TelemetryServer (backend/data_server.py)                   │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  TelemetryDataStore                                │   │
+│  │  - self.drones: Dict[str, Dict]                    │   │
+│  │  - self.pois: Dict[str, Dict]                      │   │
+│  │  - self.lock: threading.Lock (thread-safe)        │   │
+│  └────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  TelemetryDataHandler                               │   │
+│  │  - do_GET(): Maneja peticiones HTTP                 │   │
+│  │  - /api/data: Retorna {drones: {...}, pois: {...}} │   │
+│  │  - CORS habilitado para JavaScript                  │   │
+│  └────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  HTTPServer                                         │   │
+│  │  - Puerto: 8765                                     │   │
+│  │  - Hilo separado (daemon=True)                      │   │
+│  │  - Se detiene automáticamente al cerrar app        │   │
+│  └────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Flujo de Datos del Servidor HTTP
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Actualización de Telemetría                                 │
+│                                                              │
+│  map_view.update_drone(telemetry)                           │
+│    └─> telemetry_server.update_telemetry(telemetry)         │
+│        └─> data_store.update_telemetry(telemetry)          │
+│            - Con lock: data_store.drones[drone_id] = telemetry│
+└─────────────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Petición HTTP desde JavaScript                              │
+│                                                              │
+│  fetch('http://localhost:8765/api/data')                    │
+│    └─> TelemetryDataHandler.do_GET()                        │
+│        └─> data_store.get_all_data()                        │
+│            - Con lock: return {drones: {...}, pois: {...}}  │
+│        └─> _send_json_response(data)                        │
+│            - CORS headers                                    │
+│            - JSON response                                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 7. Patrones de Diseño Clave
 
 ### 1. **Patrón Callback**
 - Los drones usan callbacks para enviar actualizaciones de telemetría
@@ -603,6 +752,7 @@ ui/map_view.py
 
 ### 3. **Patrón Singleton-like**
 - `Config` y `POIStorage` se crean una vez y se comparten
+- `TelemetryServer` se crea una vez por instancia de `MapView`
 - Asegura estado consistente entre componentes
 
 ### 4. **Patrón Factory**
@@ -619,9 +769,18 @@ ui/map_view.py
 - `MapView` usa estrategia diferente según plataforma (WebView vs Fallback)
 - `MapView` usa estrategia diferente según disponibilidad (Folium vs HTML puro)
 
+### 7. **Patrón Polling (Nuevo)**
+- JavaScript en el mapa hace polling al servidor HTTP cada 0.5s
+- Permite actualizaciones incrementales sin recargar la página
+- Evita problemas de recarga constante del mapa
+
+### 8. **Patrón Thread-Safe Data Store**
+- `TelemetryDataStore` usa locks para acceso thread-safe
+- Permite que múltiples hilos (Python y JavaScript) accedan a los datos de forma segura
+
 ---
 
-## 7. Estructuras de Datos
+## 8. Estructuras de Datos
 
 ### Diccionario de Telemetría
 ```python
@@ -654,9 +813,39 @@ ui/map_view.py
 }
 ```
 
+### Respuesta del Servidor HTTP (/api/data)
+```json
+{
+    "drones": {
+        "DRONE_000": {
+            "drone_id": "DRONE_000",
+            "latitude": 20.9674,
+            "longitude": -89.5926,
+            "altitude": 50.5,
+            "heading": 180.0,
+            "velocity": 15.2,
+            "battery": 85.3,
+            "status": "flying",
+            "timestamp": 1234567890.123
+        },
+        "DRONE_001": { ... }
+    },
+    "pois": {
+        "poi_1234567890": {
+            "id": "poi_1234567890",
+            "latitude": 20.9750,
+            "longitude": -89.6000,
+            "type": "hazard",
+            "description": "Zona de construcción",
+            "timestamp": 1234567890.123
+        }
+    }
+}
+```
+
 ---
 
-## 8. Manejo de Errores
+## 9. Manejo de Errores
 
 - **Carga de configuración**: Recurre a valores por defecto si el archivo no existe
 - **Almacenamiento de POI**: Maneja errores de decodificación JSON con gracia
@@ -664,17 +853,21 @@ ui/map_view.py
 - **Actualizaciones de UI**: Verifica None antes de actualizar componentes
 - **Mapa HTML**: Valida coordenadas antes de agregar marcadores
 - **WebView**: Detecta si no está soportado y usa vista alternativa automáticamente
+- **Servidor HTTP**: Maneja errores de conexión y continúa funcionando
+- **Polling JavaScript**: Maneja errores de red y continúa intentando
 
 ---
 
 ## Resumen
 
-El sistema sigue una **arquitectura en capas**:
+El sistema sigue una **arquitectura en capas** con actualizaciones incrementales:
 
 1. **Punto de Entrada** (`main.py`) - Inicializa todo
 2. **Capa UI** (`ui/`) - Maneja interfaz de usuario e interacciones, incluyendo mapa interactivo
 3. **Capa de Simulación** (`drones/`) - Genera datos de telemetría
-4. **Capa de Almacenamiento** (`backend/`) - Persiste datos de POI
+4. **Capa de Almacenamiento** (`backend/`) - Persiste datos de POI y sirve datos en tiempo real
 5. **Capa Común** (`common/`) - Utilidades y configuración compartidas
 
-Los datos fluyen **hacia arriba** desde los drones a la UI, y **hacia abajo** desde la UI al almacenamiento. Todos los componentes se comunican a través de **callbacks** y **pub/sub** para actualizaciones en tiempo real. El mapa interactivo se actualiza automáticamente con cada telemetría recibida, regenerando el HTML con Folium o JavaScript puro según disponibilidad.
+Los datos fluyen **hacia arriba** desde los drones a la UI, y **hacia abajo** desde la UI al almacenamiento. Todos los componentes se comunican a través de **callbacks** y **pub/sub** para actualizaciones en tiempo real. El mapa interactivo se actualiza automáticamente con cada telemetría recibida usando un **servidor HTTP interno** y **polling JavaScript**, evitando recargas constantes de la página y proporcionando una experiencia de usuario fluida.
+
+El **TelemetryServer** actúa como intermediario entre el backend Python y el frontend JavaScript, permitiendo actualizaciones incrementales sin regenerar el HTML completo, lo que resuelve el problema de recargas constantes del mapa.

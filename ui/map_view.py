@@ -10,6 +10,7 @@ import json
 from typing import Dict, List, Any, Optional, Callable
 from common.constants import POIType
 from common.colors import GREY_200, GREY_600, RED, GREEN, BLUE, AMBER, GREY
+from backend.data_server import TelemetryServer
 
 
 class MapView:
@@ -48,6 +49,10 @@ class MapView:
         # Archivo temporal para el mapa HTML
         self.temp_file = None
         self.map_html_path = None
+        
+        # Servidor HTTP para servir datos de telemetría
+        self.telemetry_server = TelemetryServer(port=8765)
+        self.telemetry_server.start()
         
         # Crear mapa inicial
         self._create_map()
@@ -121,7 +126,8 @@ class MapView:
                 'lon': telemetry.get('longitude', 0),
                 'heading': telemetry.get('heading', 0),
                 'battery': telemetry.get('battery', 100),
-                'altitude': telemetry.get('altitude', 0)
+                'altitude': telemetry.get('altitude', 0),
+                'velocity': telemetry.get('velocity', 0)
             })
         
         pois_js = []
@@ -149,12 +155,12 @@ class MapView:
         body {{ margin: 0; padding: 0; }}
         #map {{ height: 100vh; width: 100%; }}
         .drone-icon {{
-            background: #4CAF50;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            border: 2px solid white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }}
+        .drone-icon svg {{
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
         }}
         .poi-icon {{
             width: 16px;
@@ -195,32 +201,65 @@ class MapView:
             // Por ahora, el usuario puede usar el botón "Agregar POI"
         }});
         
+        // Función para crear icono de dron con rotación
+        function createDroneIcon(batteryColor, heading) {{
+            heading = heading || 0;
+            var rotation = heading; // Rotar según el heading
+            // Crear icono SVG de avión más visible
+            var svgIcon = '<div style="width: 32px; height: 32px; position: relative; transform: rotate(' + rotation + 'deg); transform-origin: 16px 16px;">' +
+                '<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">' +
+                '<path d="M16 4 L20 12 L28 14 L20 16 L16 24 L12 16 L4 14 L12 12 Z" fill="' + batteryColor + '" stroke="white" stroke-width="2" stroke-linejoin="round"/>' +
+                '<circle cx="16" cy="16" r="4" fill="white" opacity="0.9"/>' +
+                '</svg>' +
+                '</div>';
+            return L.divIcon({{
+                className: 'drone-icon',
+                html: svgIcon,
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            }});
+        }}
+        
         // Función para actualizar/agregar dron
-        window.updateDrone = function(droneId, lat, lon, heading, battery, altitude) {{
+        window.updateDrone = function(droneId, lat, lon, heading, battery, altitude, velocity) {{
+            velocity = velocity || 0;
+            heading = heading || 0;
             var batteryColor = battery > 50 ? '#4CAF50' : (battery > 20 ? '#FFC107' : '#F44336');
             
+            // Validar coordenadas
+            if (!lat || !lon || isNaN(lat) || isNaN(lon) || lat === 0 || lon === 0) {{
+                console.warn('Coordenadas inválidas para', droneId, ':', lat, lon);
+                return;
+            }}
+            
             if (droneMarkers[droneId]) {{
+                // Actualizar posición
                 droneMarkers[droneId].setLatLng([lat, lon]);
+                // Actualizar popup
                 droneMarkers[droneId].setPopupContent(
                     '<b>Dron: ' + droneId + '</b><br>' +
                     'Batería: ' + battery.toFixed(1) + '%<br>' +
                     'Altitud: ' + altitude.toFixed(1) + 'm<br>' +
-                    'Velocidad: ' + (telemetry.velocity || 0).toFixed(1) + ' m/s'
+                    'Velocidad: ' + velocity.toFixed(1) + ' m/s<br>' +
+                    'Rumbo: ' + heading.toFixed(1) + '°'
                 );
+                // Actualizar icono (color y rotación)
+                var icon = createDroneIcon(batteryColor, heading);
+                droneMarkers[droneId].setIcon(icon);
             }} else {{
-                var icon = L.divIcon({{
-                    className: 'drone-icon',
-                    html: '<div style="background: ' + batteryColor + '; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
-                    iconSize: [20, 20],
-                    iconAnchor: [10, 10]
-                }});
+                // Crear nuevo marcador
+                console.log('Creando nuevo marcador para', droneId, 'en', lat, lon);
+                var icon = createDroneIcon(batteryColor, heading);
                 var marker = L.marker([lat, lon], {{icon: icon}}).addTo(map);
                 marker.bindPopup(
                     '<b>Dron: ' + droneId + '</b><br>' +
                     'Batería: ' + battery.toFixed(1) + '%<br>' +
-                    'Altitud: ' + altitude.toFixed(1) + 'm'
+                    'Altitud: ' + altitude.toFixed(1) + 'm<br>' +
+                    'Velocidad: ' + velocity.toFixed(1) + ' m/s<br>' +
+                    'Rumbo: ' + heading.toFixed(1) + '°'
                 );
                 droneMarkers[droneId] = marker;
+                console.log('Marcador creado para', droneId, 'Total marcadores:', Object.keys(droneMarkers).length);
             }}
         }};
         
@@ -272,21 +311,25 @@ class MapView:
         var initialDrones = {drones_json};
         var initialPOIs = {pois_json};
         
-        for (var i = 0; i < initialDrones.length; i++) {{
-            var d = initialDrones[i];
-            window.updateDrone(d.id, d.lat, d.lon, d.heading, d.battery, d.altitude);
-        }}
+        console.log('Inicializando mapa con', initialDrones.length, 'drones y', initialPOIs.length, 'POIs');
         
-        for (var i = 0; i < initialPOIs.length; i++) {{
-            var p = initialPOIs[i];
-            window.updatePOI(p.id, p.lat, p.lon, p.type, p.description);
-        }}
+        // Esperar a que el mapa esté completamente cargado antes de agregar marcadores
+        map.whenReady(function() {{
+            console.log('Mapa listo, agregando drones iniciales...');
+            for (var i = 0; i < initialDrones.length; i++) {{
+                var d = initialDrones[i];
+                console.log('Agregando dron inicial:', d.id, 'en', d.lat, d.lon);
+                window.updateDrone(d.id, d.lat, d.lon, d.heading, d.battery, d.altitude, d.velocity || 0);
+            }}
+            
+            for (var i = 0; i < initialPOIs.length; i++) {{
+                var p = initialPOIs[i];
+                window.updatePOI(p.id, p.lat, p.lon, p.type, p.description);
+            }}
+            console.log('Drones y POIs iniciales agregados. Total marcadores:', Object.keys(droneMarkers).length);
+        }});
         
-        // Auto-refresh: Recargar página cada 2 segundos para ver actualizaciones
-        // Guardar zoom y posición antes de recargar para restaurarlos después
-        var reloadInterval = 2000; // 2 segundos
-        var lastReload = Date.now();
-        
+        // Guardar estado del mapa periódicamente (sin recargar)
         function saveMapState() {{
             if (typeof map !== 'undefined' && map) {{
                 try {{
@@ -297,7 +340,7 @@ class MapView:
                         localStorage.setItem('mapZoom', zoom.toString());
                     }}
                 }} catch(e) {{
-                    console.log('Error guardando estado del mapa:', e);
+                    // Silenciar errores de guardado
                 }}
             }}
         }}
@@ -311,11 +354,11 @@ class MapView:
                         var center = JSON.parse(savedCenter);
                         var zoom = parseInt(savedZoom);
                         if (center && typeof center.lat === 'number' && typeof center.lng === 'number' && !isNaN(zoom)) {{
-                            map.setView([center.lat, center.lng], zoom);
+                            map.setView([center.lat, center.lng], zoom, {{reset: false}});
                             return true;
                         }}
                     }} catch(e) {{
-                        console.log('Error restaurando estado del mapa:', e);
+                        // Silenciar errores de restauración
                     }}
                 }}
             }}
@@ -323,38 +366,133 @@ class MapView:
         }}
         
         // Restaurar estado del mapa al cargar (después de que el mapa esté listo)
-        setTimeout(function() {{
-            restoreMapState();
-        }}, 500);
-        
-        function checkAndReload() {{
-            var now = Date.now();
-            if (now - lastReload >= reloadInterval) {{
-                saveMapState();
-                lastReload = now;
-                // Pequeño delay antes de recargar para asegurar que el estado se guarde
-                setTimeout(function() {{
-                    location.reload();
-                }}, 100);
+        // Intentar restaurar inmediatamente y luego con delay para asegurar que funcione
+        function tryRestoreState() {{
+            if (restoreMapState()) {{
+                return true;
             }}
+            // Si no se pudo restaurar, intentar de nuevo después de un delay
+            setTimeout(function() {{
+                restoreMapState();
+            }}, 300);
+            return false;
         }}
         
-        // Guardar estado periódicamente (cada segundo) para no perderlo
-        setInterval(saveMapState, 1000);
-        
-        // Guardar estado antes de recargar
-        window.addEventListener('beforeunload', saveMapState);
-        
-        // Iniciar auto-refresh
-        setInterval(checkAndReload, reloadInterval);
-        
-        // También intentar recargar cuando la ventana recibe foco
-        window.addEventListener('focus', function() {{
-            saveMapState();
+        // Intentar restaurar estado cuando el mapa esté listo
+        map.whenReady(function() {{
             setTimeout(function() {{
-                location.reload();
+                tryRestoreState();
             }}, 100);
         }});
+        
+        // También intentar después de un delay adicional
+        setTimeout(function() {{
+            tryRestoreState();
+        }}, 500);
+        
+        // Guardar estado periódicamente (cada 2 segundos) sin recargar
+        setInterval(saveMapState, 2000);
+        
+        // Guardar estado cuando el usuario mueve o hace zoom en el mapa
+        map.on('moveend', saveMapState);
+        map.on('zoomend', saveMapState);
+        
+        // Guardar estado antes de cerrar
+        window.addEventListener('beforeunload', saveMapState);
+        
+        // Polling para actualizar datos desde el servidor HTTP
+        var apiUrl = 'http://localhost:8765/api/data';
+        var updateCount = 0;
+        var lastUpdateTime = 0;
+        
+        function updateFromServer() {{
+            var now = Date.now();
+            // Evitar actualizaciones muy frecuentes (mínimo 1 segundo entre actualizaciones)
+            if (now - lastUpdateTime < 1000) {{
+                return;
+            }}
+            lastUpdateTime = now;
+            updateCount++;
+            
+            fetch(apiUrl)
+                .then(function(response) {{
+                    if (!response.ok) {{
+                        throw new Error('Network response was not ok: ' + response.status);
+                    }}
+                    return response.json();
+                }})
+                .then(function(data) {{
+                    // Actualizar drones
+                    if (data.drones && typeof data.drones === 'object') {{
+                        var droneCount = 0;
+                        var droneIds = Object.keys(data.drones);
+                        if (updateCount === 1 || updateCount % 20 === 0) {{
+                            console.log('Recibidos', droneIds.length, 'drones del servidor:', droneIds);
+                        }}
+                        for (var droneId in data.drones) {{
+                            if (data.drones.hasOwnProperty(droneId)) {{
+                                var drone = data.drones[droneId];
+                                if (drone && typeof drone === 'object') {{
+                                    var lat = drone.latitude || drone.lat || 0;
+                                    var lon = drone.longitude || drone.lon || 0;
+                                    if (lat && lon && lat !== 0 && lon !== 0) {{
+                                        window.updateDrone(
+                                            droneId,
+                                            lat,
+                                            lon,
+                                            drone.heading || 0,
+                                            drone.battery || 100,
+                                            drone.altitude || 0,
+                                            drone.velocity || 0
+                                        );
+                                        droneCount++;
+                                    }} else {{
+                                        if (updateCount % 20 === 0) {{
+                                            console.warn('Dron', droneId, 'tiene coordenadas inválidas:', lat, lon);
+                                        }}
+                                    }}
+                                }}
+                            }}
+                        }}
+                        if (updateCount % 20 === 0) {{
+                            console.log('Drones actualizados en mapa:', droneCount, 'de', droneIds.length);
+                        }}
+                    }}
+                    
+                    // Actualizar POIs
+                    if (data.pois && typeof data.pois === 'object') {{
+                        for (var poiId in data.pois) {{
+                            if (data.pois.hasOwnProperty(poiId)) {{
+                                var poi = data.pois[poiId];
+                                if (poi && typeof poi === 'object') {{
+                                    window.updatePOI(
+                                        poiId,
+                                        poi.latitude || 0,
+                                        poi.longitude || 0,
+                                        poi.type || 'other',
+                                        poi.description || ''
+                                    );
+                                }}
+                            }}
+                        }}
+                    }}
+                }})
+                .catch(function(error) {{
+                    // Solo mostrar errores ocasionalmente para no saturar la consola
+                    if (updateCount % 30 === 0) {{
+                        console.log('Error actualizando desde servidor (intento ' + updateCount + '):', error.message);
+                    }}
+                }});
+        }}
+        
+        // Actualizar cada 1 segundo (optimizado para no saturar)
+        setInterval(updateFromServer, 1000);
+        
+        // Actualizar inmediatamente después de un pequeño delay
+        setTimeout(function() {{
+            console.log('Iniciando polling del servidor en', apiUrl);
+            updateFromServer();
+        }}, 1500);
     </script>
 </body>
 </html>
@@ -458,19 +596,18 @@ class MapView:
             # Buscar el cierre de </body> o </html>
             auto_refresh_script = """
         <script>
-        // Auto-refresh: Recargar página cada 2 segundos para ver actualizaciones
-        // Guardar zoom y posición antes de recargar para restaurarlos después
-        var reloadInterval = 2000; // 2 segundos
-        var lastReload = Date.now();
-        
-        // Función mejorada para encontrar el objeto del mapa de Leaflet
+        // Guardar estado del mapa periódicamente (sin recargar)
         function findMapObject() {
-            // Método 1: Buscar en window por objetos con métodos de Leaflet
+            // Buscar el objeto del mapa de Leaflet
+            // Folium puede crear el mapa con diferentes nombres
+            if (typeof map !== 'undefined' && map && typeof map.getCenter === 'function') {
+                return map;
+            }
+            // Buscar en window
             for (var key in window) {
                 try {
                     var obj = window[key];
                     if (obj && typeof obj === 'object' && typeof obj.getCenter === 'function' && typeof obj.getZoom === 'function') {
-                        // Verificar que realmente es un mapa de Leaflet
                         if (obj._container && obj._container.classList && obj._container.classList.contains('leaflet-container')) {
                             return obj;
                         }
@@ -479,40 +616,26 @@ class MapView:
                     continue;
                 }
             }
-            
-            // Método 2: Buscar desde el contenedor del mapa usando Leaflet API
+            // Buscar desde el contenedor del mapa
             var mapContainer = document.querySelector('.leaflet-container');
-            if (mapContainer && typeof L !== 'undefined') {
+            if (mapContainer && typeof L !== 'undefined' && L.Map) {
                 // Leaflet almacena referencias en el contenedor
-                if (mapContainer._leaflet_id) {
-                    // Buscar en el registro interno de Leaflet
-                    if (L.Map && L.Map.prototype) {
-                        // Intentar obtener desde el contenedor
-                        for (var key in window) {
-                            try {
-                                var obj = window[key];
-                                if (obj && obj instanceof L.Map && obj._container === mapContainer) {
-                                    return obj;
+                for (var key in L.Map._instances || {}) {
+                    try {
+                        var mapInstance = L.Map._instances[key];
+                        if (mapInstance && mapInstance._container === mapContainer) {
+                            return mapInstance;
                                 }
                             } catch(e) {
                                 continue;
                             }
                         }
                     }
-                }
-            }
-            
-            // Método 3: Usar eventos de Leaflet para obtener el mapa
-            // Este método se ejecutará cuando el mapa esté listo
             return null;
         }
         
-        // Variable global para almacenar referencia al mapa
-        var mapInstance = null;
-        
         function saveMapState() {
-            // Usar mapInstance si está disponible, sino buscar
-            var mapObj = mapInstance || findMapObject();
+            var mapObj = findMapObject();
             if (mapObj) {
                 try {
                     var center = mapObj.getCenter();
@@ -520,19 +643,17 @@ class MapView:
                     if (center && typeof center.lat === 'number' && typeof center.lng === 'number' && !isNaN(zoom) && zoom > 0) {
                         localStorage.setItem('mapCenter', JSON.stringify({lat: center.lat, lng: center.lng}));
                         localStorage.setItem('mapZoom', zoom.toString());
-                        console.log('Estado del mapa guardado:', center.lat, center.lng, zoom);
                         return true;
                     }
                 } catch(e) {
-                    console.log('Error guardando estado del mapa:', e);
+                    // Silenciar errores
                 }
             }
             return false;
         }
         
         function restoreMapState() {
-            // Usar mapInstance si está disponible, sino buscar
-            var mapObj = mapInstance || findMapObject();
+            var mapObj = findMapObject();
             if (mapObj) {
                 var savedCenter = localStorage.getItem('mapCenter');
                 var savedZoom = localStorage.getItem('mapZoom');
@@ -541,121 +662,258 @@ class MapView:
                         var center = JSON.parse(savedCenter);
                         var zoom = parseInt(savedZoom);
                         if (center && typeof center.lat === 'number' && typeof center.lng === 'number' && !isNaN(zoom) && zoom > 0) {
-                            // Usar {reset: false} para no resetear la animación
                             mapObj.setView([center.lat, center.lng], zoom, {reset: false});
-                            console.log('Estado del mapa restaurado:', center.lat, center.lng, zoom);
                             return true;
                         }
                     } catch(e) {
-                        console.log('Error restaurando estado del mapa:', e);
+                        // Silenciar errores
                     }
                 }
             }
             return false;
         }
         
-        // Función para esperar a que el mapa esté completamente cargado
-        function waitForMap(callback, maxAttempts) {
-            maxAttempts = maxAttempts || 30; // Intentar hasta 30 veces (15 segundos)
+        // Esperar a que el mapa esté listo
+        function waitForMap(callback) {
             var attempts = 0;
-            
-            function checkMap() {
+            var maxAttempts = 20;
+            function check() {
                 attempts++;
                 var mapObj = findMapObject();
                 if (mapObj) {
-                    // Verificar que el mapa esté completamente inicializado
                     try {
                         var center = mapObj.getCenter();
                         var zoom = mapObj.getZoom();
                         if (center && !isNaN(zoom) && zoom > 0) {
-                            mapInstance = mapObj;
                             callback(mapObj);
                             return;
                         }
                     } catch(e) {
-                        // El mapa aún no está listo
+                        // Mapa aún no está listo
                     }
                 }
-                
                 if (attempts < maxAttempts) {
-                    setTimeout(checkMap, 500); // Intentar cada 500ms
+                    setTimeout(check, 500);
                 } else {
-                    console.log('Timeout esperando mapa, continuando sin restaurar estado');
                     callback(null);
                 }
             }
-            
-            checkMap();
+            check();
         }
         
-        // Usar eventos de Leaflet si están disponibles
-        if (typeof L !== 'undefined') {
-            // Escuchar cuando se crea un mapa
-            var originalMapInit = L.Map.prototype.initialize;
-            L.Map.prototype.initialize = function() {
-                originalMapInit.apply(this, arguments);
-                mapInstance = this;
                 // Restaurar estado cuando el mapa esté listo
-                this.on('load', function() {
+        waitForMap(function(mapObj) {
+            if (mapObj) {
                     setTimeout(function() {
                         restoreMapState();
-                    }, 100);
+                }, 300);
+            }
+        });
+        
+        // Guardar estado periódicamente (cada 2 segundos) sin recargar
+        setInterval(saveMapState, 2000);
+        
+        // Guardar estado cuando el usuario mueve o hace zoom en el mapa
+        waitForMap(function(mapObj) {
+            if (mapObj) {
+                mapObj.on('moveend', saveMapState);
+                mapObj.on('zoomend', saveMapState);
+            }
+        });
+        
+        // Guardar estado antes de cerrar
+        window.addEventListener('beforeunload', saveMapState);
+        
+        // Funciones para actualizar drones y POIs (si no existen ya)
+        if (typeof window.updateDrone === 'undefined') {
+            window.droneMarkers = window.droneMarkers || {};
+            window.poiMarkers = window.poiMarkers || {};
+            
+            // Función para crear icono de dron con rotación
+            function createDroneIconFolium(batteryColor, heading) {
+                heading = heading || 0;
+                var rotation = heading;
+                // Crear icono SVG de avión más visible
+                var svgIcon = '<div style="width: 32px; height: 32px; position: relative; transform: rotate(' + rotation + 'deg); transform-origin: 16px 16px;">' +
+                    '<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">' +
+                    '<path d="M16 4 L20 12 L28 14 L20 16 L16 24 L12 16 L4 14 L12 12 Z" fill="' + batteryColor + '" stroke="white" stroke-width="2" stroke-linejoin="round"/>' +
+                    '<circle cx="16" cy="16" r="4" fill="white" opacity="0.9"/>' +
+                    '</svg>' +
+                    '</div>';
+                return L.divIcon({
+                    className: 'drone-icon',
+                    html: svgIcon,
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
                 });
+            }
+            
+            window.updateDrone = function(droneId, lat, lon, heading, battery, altitude, velocity) {
+                velocity = velocity || 0;
+                heading = heading || 0;
+                var batteryColor = battery > 50 ? '#4CAF50' : (battery > 20 ? '#FFC107' : '#F44336');
+                var mapObj = findMapObject();
+                if (!mapObj) {
+                    console.warn('No se encontró objeto del mapa para', droneId);
+                    return;
+                }
+                
+                // Validar coordenadas
+                if (!lat || !lon || isNaN(lat) || isNaN(lon) || lat === 0 || lon === 0) {
+                    console.warn('Coordenadas inválidas para', droneId, ':', lat, lon);
+                    return;
+                }
+                
+                if (window.droneMarkers[droneId]) {
+                    window.droneMarkers[droneId].setLatLng([lat, lon]);
+                    window.droneMarkers[droneId].setPopupContent(
+                        '<b>Dron: ' + droneId + '</b><br>' +
+                        'Batería: ' + battery.toFixed(1) + '%<br>' +
+                        'Altitud: ' + altitude.toFixed(1) + 'm<br>' +
+                        'Velocidad: ' + velocity.toFixed(1) + ' m/s<br>' +
+                        'Rumbo: ' + heading.toFixed(1) + '°'
+                    );
+                    // Actualizar icono (color y rotación)
+                    var icon = createDroneIconFolium(batteryColor, heading);
+                    window.droneMarkers[droneId].setIcon(icon);
+                } else {
+                    console.log('Creando nuevo marcador para', droneId, 'en', lat, lon);
+                    var icon = createDroneIconFolium(batteryColor, heading);
+                    var marker = L.marker([lat, lon], {icon: icon}).addTo(mapObj);
+                    marker.bindPopup(
+                        '<b>Dron: ' + droneId + '</b><br>' +
+                        'Batería: ' + battery.toFixed(1) + '%<br>' +
+                        'Altitud: ' + altitude.toFixed(1) + 'm<br>' +
+                        'Velocidad: ' + velocity.toFixed(1) + ' m/s<br>' +
+                        'Rumbo: ' + heading.toFixed(1) + '°'
+                    );
+                    window.droneMarkers[droneId] = marker;
+                    console.log('Marcador creado para', droneId, 'Total marcadores:', Object.keys(window.droneMarkers).length);
+                }
+            };
+            
+            window.updatePOI = function(poiId, lat, lon, type, description) {
+                var poiColors = {
+                    'hazard': '#F44336',
+                    'target': '#2196F3',
+                    'checkpoint': '#FFC107',
+                    'landing_zone': '#4CAF50',
+                    'other': '#9E9E9E'
+                };
+                var color = poiColors[type] || poiColors['other'];
+                var mapObj = findMapObject();
+                if (!mapObj) return;
+                
+                if (window.poiMarkers[poiId]) {
+                    window.poiMarkers[poiId].setLatLng([lat, lon]);
+                    window.poiMarkers[poiId].setPopupContent('<b>' + type.toUpperCase() + '</b><br>' + description);
+                } else {
+                    var icon = L.divIcon({
+                        className: 'poi-icon',
+                        html: '<div style="background: ' + color + '; width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    var marker = L.marker([lat, lon], {icon: icon}).addTo(mapObj);
+                    marker.bindPopup('<b>' + type.toUpperCase() + '</b><br>' + description);
+                    window.poiMarkers[poiId] = marker;
+                }
             };
         }
         
-        // Esperar a que el mapa esté completamente cargado antes de restaurar
-        waitForMap(function(mapObj) {
-            if (mapObj) {
-                // Restaurar estado después de un pequeño delay para asegurar que todo esté listo
-                setTimeout(function() {
-                    if (restoreMapState()) {
-                        console.log('Estado del mapa restaurado exitosamente');
-                    }
-                }, 300);
+        // Polling para actualizar datos desde el servidor HTTP
+        var apiUrl = 'http://localhost:8765/api/data';
+        var updateCount = 0;
+        var lastUpdateTime = 0;
+        
+        function updateFromServer() {
+            var now = Date.now();
+            // Evitar actualizaciones muy frecuentes (mínimo 1 segundo entre actualizaciones)
+            if (now - lastUpdateTime < 1000) {
+                return;
             }
+            lastUpdateTime = now;
+            updateCount++;
             
-            // Actualizar referencia al mapa periódicamente
-            setInterval(function() {
-                var found = findMapObject();
-                if (found) {
-                    mapInstance = found;
-                }
-            }, 2000);
-            
-            function checkAndReload() {
-                var now = Date.now();
-                if (now - lastReload >= reloadInterval) {
-                    // Usar mapInstance si está disponible, sino buscar
-                    if (!mapInstance) {
-                        mapInstance = findMapObject();
+            fetch(apiUrl)
+                .then(function(response) {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok: ' + response.status);
                     }
-                    saveMapState();
-                    lastReload = now;
-                    // Pequeño delay antes de recargar para asegurar que el estado se guarde
-                    setTimeout(function() {
-                        location.reload();
-                    }, 100);
-                }
-            }
-            
-            // Guardar estado antes de recargar
-            window.addEventListener('beforeunload', saveMapState);
-            
-            // Guardar estado periódicamente (cada segundo) para no perderlo
-            setInterval(saveMapState, 1000);
-            
-            // Iniciar auto-refresh
-            setInterval(checkAndReload, reloadInterval);
-            
-            // También intentar recargar cuando la ventana recibe foco
-            window.addEventListener('focus', function() {
-                saveMapState();
-                setTimeout(function() {
-                    location.reload();
-                }, 100);
-            });
-        });
+                    return response.json();
+                })
+                .then(function(data) {
+                    // Actualizar drones
+                    if (data.drones && typeof data.drones === 'object') {
+                        var droneCount = 0;
+                        var droneIds = Object.keys(data.drones);
+                        if (updateCount === 1 || updateCount % 20 === 0) {
+                            console.log('Recibidos', droneIds.length, 'drones del servidor:', droneIds);
+                        }
+                        for (var droneId in data.drones) {
+                            if (data.drones.hasOwnProperty(droneId)) {
+                                var drone = data.drones[droneId];
+                                if (drone && typeof drone === 'object') {
+                                    var lat = drone.latitude || drone.lat || 0;
+                                    var lon = drone.longitude || drone.lon || 0;
+                                    if (lat && lon && lat !== 0 && lon !== 0) {
+                                        window.updateDrone(
+                                            droneId,
+                                            lat,
+                                            lon,
+                                            drone.heading || 0,
+                                            drone.battery || 100,
+                                            drone.altitude || 0,
+                                            drone.velocity || 0
+                                        );
+                                        droneCount++;
+                                    } else {
+                                        if (updateCount % 20 === 0) {
+                                            console.warn('Dron', droneId, 'tiene coordenadas inválidas:', lat, lon);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (updateCount % 20 === 0) {
+                            console.log('Drones actualizados en mapa:', droneCount, 'de', droneIds.length);
+                        }
+                    }
+                    
+                    // Actualizar POIs
+                    if (data.pois && typeof data.pois === 'object') {
+                        for (var poiId in data.pois) {
+                            if (data.pois.hasOwnProperty(poiId)) {
+                                var poi = data.pois[poiId];
+                                if (poi && typeof poi === 'object') {
+                                    window.updatePOI(
+                                        poiId,
+                                        poi.latitude || 0,
+                                        poi.longitude || 0,
+                                        poi.type || 'other',
+                                        poi.description || ''
+                                    );
+                                }
+                            }
+                        }
+                    }
+                })
+                .catch(function(error) {
+                    // Solo mostrar errores ocasionalmente para no saturar la consola
+                    if (updateCount % 30 === 0) {
+                        console.log('Error actualizando desde servidor (intento ' + updateCount + '):', error.message);
+                    }
+                });
+        }
+        
+        // Actualizar cada 1 segundo (optimizado para no saturar)
+        setInterval(updateFromServer, 1000);
+        
+        // Actualizar inmediatamente después de un pequeño delay
+        setTimeout(function() {
+            console.log('Iniciando polling del servidor en', apiUrl);
+            updateFromServer();
+        }, 1500);
         </script>
 """
             
@@ -710,6 +968,7 @@ class MapView:
     def update_drone(self, telemetry: Dict[str, Any]):
         """
         Actualiza la posición del dron en el mapa.
+        Ahora solo actualiza el servidor HTTP, el JavaScript hace el polling.
         
         Args:
             telemetry: Diccionario de telemetría con datos del dron
@@ -724,11 +983,10 @@ class MapView:
         self.drones[drone_id] = telemetry
         logger.debug(f"Actualizando dron {drone_id} en mapa: {len(self.drones)} drones totales")
         
-        # Actualizar mapa HTML (regenerar completo para simplicidad)
-        self._update_map_html()
-        self._reload_map()
+        # Actualizar servidor HTTP (el JavaScript hará polling y actualizará los marcadores)
+        self.telemetry_server.update_telemetry(telemetry)
         
-        # Si estamos usando fallback, actualizar vista alternativa
+        # Si estamos usando fallback, actualizar vista alternativa siempre
         if hasattr(self, 'drone_list'):
             self._update_fallback_view()
     
@@ -742,8 +1000,8 @@ class MapView:
         poi_id = poi.get("id")
         if poi_id:
             self.pois[poi_id] = poi
-            self._update_map_html()
-            self._reload_map()
+            # Actualizar servidor HTTP (el JavaScript hará polling)
+            self.telemetry_server.update_poi(poi)
             
             # Si estamos usando fallback, actualizar vista alternativa
             if hasattr(self, 'poi_list'):
@@ -758,8 +1016,8 @@ class MapView:
         """
         if poi_id in self.pois:
             del self.pois[poi_id]
-            self._update_map_html()
-            self._reload_map()
+            # Actualizar servidor HTTP
+            self.telemetry_server.remove_poi(poi_id)
             
             # Si estamos usando fallback, actualizar vista alternativa
             if hasattr(self, 'poi_list'):
@@ -808,9 +1066,13 @@ class MapView:
         """Crea una vista alternativa cuando WebView no está disponible."""
         # Crear una representación visual del mapa usando componentes Flet
         if not hasattr(self, 'drone_list'):
-            self.drone_list = ft.Column(controls=[], spacing=5, scroll=ft.ScrollMode.AUTO)
+            self.drone_list = ft.Column(controls=[], spacing=5, scroll=ft.ScrollMode.AUTO, expand=True)
         if not hasattr(self, 'poi_list'):
-            self.poi_list = ft.Column(controls=[], spacing=5, scroll=ft.ScrollMode.AUTO)
+            self.poi_list = ft.Column(controls=[], spacing=5, scroll=ft.ScrollMode.AUTO, expand=True)
+        
+        # Calcular altura para las listas scrolleables (aproximadamente mitad de la ventana cada una)
+        # Usar altura fija razonable para habilitar scroll
+        list_height = 250  # Altura fija para cada lista
         
         return ft.Container(
             content=ft.Column(
@@ -833,10 +1095,18 @@ class MapView:
                     ),
                     ft.Divider(),
                     ft.Text("Drones en el Mapa:", weight=ft.FontWeight.BOLD, size=14),
-                    self.drone_list,
+                    ft.Container(
+                        content=self.drone_list,
+                        height=list_height,
+                        expand=False,
+                    ),
                     ft.Divider(),
                     ft.Text("POIs en el Mapa:", weight=ft.FontWeight.BOLD, size=14),
-                    self.poi_list,
+                    ft.Container(
+                        content=self.poi_list,
+                        height=list_height,
+                        expand=False,
+                    ),
                 ],
                 spacing=10,
                 expand=True,
@@ -962,7 +1232,15 @@ class MapView:
             return self.fallback_view
     
     def __del__(self):
-        """Limpia archivos temporales al destruir el objeto."""
+        """Limpia archivos temporales y detiene el servidor al destruir el objeto."""
+        # Detener servidor HTTP
+        if hasattr(self, 'telemetry_server'):
+            try:
+                self.telemetry_server.stop()
+            except:
+                pass
+        
+        # Limpiar archivos temporales
         if self.temp_file and self.map_html_path and os.path.exists(self.map_html_path):
             try:
                 os.unlink(self.map_html_path)
