@@ -56,12 +56,33 @@ project_root/
 
 ## Instalación
 
+### Setup Rápido (Recomendado)
+
+```bash
+# Setup automático (crea venv e instala dependencias)
+python setup.py
+
+# Activar entorno virtual
+# Windows PowerShell:
+. .\venv\Scripts\Activate.ps1
+# Windows CMD:
+venv\Scripts\activate.bat
+# Linux/macOS:
+source venv/bin/activate
+
+# Verificar setup
+python setup_check.py
+
+# Ejecutar aplicación
+python main.py
+```
+
 ### Requisitos Previos
 
 - **Python 3.10+** (verificado con Python 3.13.1)
 - **Sistema operativo**: Windows, macOS o Linux
 
-### Configuración del Entorno Virtual
+### Configuración Manual del Entorno Virtual
 
 **Windows PowerShell:**
 ```powershell
@@ -110,23 +131,57 @@ pip install -r requirements.txt
 ### Verificación de Instalación
 
 ```bash
-# Verificar que las dependencias están instaladas
+# Verificar setup completo (recomendado)
+python setup_check.py
+
+# O verificar manualmente
 python -c "import flet; import folium; print('✓ Todas las dependencias instaladas')"
 ```
 
+**Scripts de desarrollo:**
+- `setup.py` - Setup automático (crea venv e instala dependencias)
+- `setup_check.py` - Verificación completa del setup
+- `diagnostico.py` - Diagnóstico del sistema
+
 ## Uso
 
-### Inicio Rápido (Modo Telemetría Falsa)
+### Modos de Ejecución
 
-Por defecto, la aplicación usa generadores de telemetría falsa, por lo que no se requiere configuración MAVSDK:
+La aplicación puede ejecutarse en diferentes modos:
+
+#### 1. Modo Desktop (Por Defecto)
 
 ```bash
 # Asegúrate de que el venv esté activado
 python main.py
 ```
 
+- Abre una ventana de escritorio nativa
+- Funciona en Windows, macOS y Linux
+
+#### 2. Modo Web (Dashboard)
+
+```bash
+# Abre automáticamente en el navegador
+python run_web.py
+
+# O solo servidor (sin abrir navegador)
+python run_web_server.py
+```
+
+- Accesible desde `http://localhost:8550`
+- Accesible desde otros dispositivos en la red local: `http://TU_IP:8550`
+- Funciona en cualquier navegador moderno
+- Ideal para demos, acceso remoto o uso desde móviles/tablets
+
+**Ver `PLATFORMS.md` para más detalles sobre ejecución en diferentes plataformas (Web, Android, Linux).**
+
+### Inicio Rápido (Modo Telemetría Falsa)
+
+Por defecto, la aplicación usa generadores de telemetría falsa, por lo que no se requiere configuración MAVSDK.
+
 Esto hará:
-- Lanzar la ventana UI de Flet
+- Lanzar la ventana UI de Flet (o abrir en navegador si usas modo web)
 - Iniciar servidor HTTP interno en `http://localhost:8765`
 - Iniciar 3 drones simulados (configurable)
 - Mostrar telemetría en tiempo real
@@ -196,31 +251,49 @@ Cada dron muestra:
 
 ### Mapa Interactivo
 
-El sistema incluye un mapa interactivo que muestra:
+El sistema incluye un mapa interactivo con actualizaciones incrementales en tiempo real que muestra:
 
 - **Marcadores de Drones**:
-  - Color dinámico según nivel de batería (verde >50%, naranja 20-50%, rojo <20%)
+  - Iconos circulares con emoji de avión (✈) que rotan según el rumbo
+  - Color dinámico según nivel de batería:
+    - Verde (#4CAF50): Batería > 50%
+    - Amarillo (#FFC107): Batería 20-50%
+    - Rojo (#F44336): Batería < 20%
   - Popup con información detallada (ID, batería, altitud, velocidad, rumbo)
-  - Actualización en tiempo real sin recargar la página (polling cada 0.5s)
+  - Actualización en tiempo real sin recargar la página (polling cada 1 segundo)
+  - Los iconos se crean/actualizan dinámicamente usando Leaflet.js
 
 - **Marcadores de POIs**:
   - Colores por tipo (Peligro: rojo, Objetivo: azul, Punto de Control: amarillo, Zona de Aterrizaje: verde)
   - Popup con tipo y descripción
   - Persistencia en archivo JSON
+  - Sincronización automática con el mapa
 
 - **Funcionalidades**:
   - Zoom y pan interactivos
-  - Actualizaciones incrementales vía servidor HTTP interno
-  - Preservación de estado del mapa (zoom, centro) usando localStorage
+  - **Actualizaciones incrementales**: El mapa NO se recarga, solo se actualizan los marcadores
+  - Preservación de estado del mapa (zoom, centro) usando `localStorage` del navegador
   - Botón para abrir mapa en navegador externo (útil en Windows donde WebView puede no estar soportado)
   - Vista alternativa con lista de drones y POIs cuando WebView no está disponible
+  - Logs de depuración en consola del navegador (F12) para troubleshooting
+
+**Arquitectura del Mapa**:
+- **Python (Backend)**:
+  - `MapView` genera HTML con Folium o JavaScript puro
+  - `TelemetryServer` (puerto 8765) sirve datos JSON en tiempo real
+  - Almacén thread-safe en memoria para drones y POIs
+- **JavaScript (Frontend)**:
+  - Polling cada 1 segundo a `http://localhost:8765/api/data`
+  - Actualiza marcadores Leaflet dinámicamente (`setLatLng()`, `setIcon()`)
+  - Búsqueda robusta del objeto del mapa (compatible con Folium y HTML puro)
+  - Manejo de errores y reintentos automáticos
 
 **Tecnologías del Mapa**:
-- **Folium** (recomendado): Biblioteca Python para mapas interactivos
-- **HTML/JavaScript puro** (fallback): Si Folium no está disponible
-- **Leaflet.js**: Para actualizaciones incrementales de marcadores
+- **Folium** (recomendado): Biblioteca Python para generar mapas HTML con Leaflet.js embebido
+- **HTML/JavaScript puro** (fallback): Si Folium no está disponible, genera HTML manualmente
+- **Leaflet.js**: Librería de mapas interactivos en el navegador (incluida por Folium o desde CDN)
 - **OpenStreetMap**: Tiles de mapa sin necesidad de API keys
-- **Servidor HTTP interno**: Sirve datos JSON en `http://localhost:8765/api/data`
+- **Servidor HTTP interno** (`backend/data_server.py`): Sirve datos JSON en `http://localhost:8765/api/data`
 
 ### Puntos de Interés (POIs)
 
@@ -232,11 +305,15 @@ Crear POIs con:
 
 ### Actualizaciones en Tiempo Real
 
-- Telemetría se actualiza cada 0.5 segundos (configurable)
+- Telemetría se actualiza cada ~2 segundos por dron (configurable)
 - Cambios de POI se transmiten inmediatamente
-- Mapa HTML se actualiza incrementalmente sin recargar la página
-- JavaScript hace polling al servidor HTTP cada 0.5 segundos
+- **Mapa HTML se actualiza incrementalmente sin recargar la página**:
+  - Python actualiza `TelemetryServer` (almacén en memoria)
+  - JavaScript hace polling al servidor HTTP cada 1 segundo
+  - Solo se actualizan los marcadores existentes, no se regenera el HTML
+  - El zoom y centro del mapa se preservan durante las actualizaciones
 - Soporte multi-cliente vía sistema pub/sub de Flet
+- Logs de depuración disponibles en consola del navegador (F12)
 
 ## Compilación Multiplataforma
 
@@ -329,12 +406,26 @@ flet build linux
 
 ### Android
 
+**Opción 1: Compilar APK**
 ```bash
 flet build apk
 ```
 
 **Resultado:**
 - Archivo `.apk` en la carpeta `dist/`
+- Instalar en dispositivo: `adb install dist/app.apk`
+
+**Opción 2: Modo Desarrollo**
+```bash
+flet run -d android
+```
+Requiere Android SDK y dispositivo conectado vía USB.
+
+**Opción 3: Acceso Web desde Android**
+1. Ejecutar `python run_web.py` en tu computadora
+2. Abrir navegador en Android: `http://TU_IP:8550`
+
+**Ver `PLATFORMS.md` para más detalles.**
 
 **Para crear un APK firmado (release):**
 ```bash
@@ -381,6 +472,12 @@ Edita el archivo `flet.json` para personalizar:
 
 ## Desarrollo
 
+### Scripts de Desarrollo
+
+- **`setup.py`** - Setup automático: crea entorno virtual e instala dependencias
+- **`setup_check.py`** - Verificación completa: Python, venv, dependencias, estructura, imports
+- **`diagnostico.py`** - Diagnóstico del sistema: verifica configuración y funcionamiento
+
 ### Estructura del Proyecto
 
 - **drones/**: Simulación de drones y manejo de telemetría
@@ -395,12 +492,50 @@ Edita el archivo `flet.json` para personalizar:
 3. **Componentes UI**: Agregar nuevos componentes en el directorio `ui/`
 4. **Campos de Telemetría**: Extender `normalize_telemetry()` en `common/utils.py`
 
+### Verificación Pre-Commit
+
+Antes de hacer commit, verifica que todo funcione:
+
+```bash
+# Verificar setup
+python setup_check.py
+
+# Diagnóstico
+python diagnostico.py
+```
+
 ## Solución de Problemas
+
+### Error al Instalar Dependencias: "pydantic-core requiere Rust"
+
+**Problema:** Si usas Python 3.15+ (alpha/beta), algunas dependencias intentan compilarse desde fuente y requieren Rust.
+
+**Soluciones:**
+
+1. **Usar Python 3.11 o 3.12 (Recomendado):**
+   ```powershell
+   # Instalar Python 3.12 desde python.org
+   # Luego crear venv con esa versión:
+   py -3.12 -m venv venv
+   . .\venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
+
+2. **Instalar Rust:**
+   - Descarga desde [rustup.rs](https://rustup.rs/)
+   - Reinicia PowerShell después de instalar
+   - Verifica: `rustc --version` y `cargo --version`
+   - Vuelve a intentar: `pip install -r requirements.txt`
+
+3. **Instalar solo dependencias básicas:**
+   ```powershell
+   pip install flet folium
+   ```
 
 ### Ventana de Flet No Se Abre
 
 - Asegurar que Flet está instalado: `pip install 'flet[all]'`
-- Verificar versión de Python: `python --version` (debe ser 3.10+)
+- Verificar versión de Python: `python --version` (debe ser 3.10+, recomendado 3.11 o 3.12)
 - Verificar que el venv esté activado (deberías ver `(venv)` en el prompt)
 
 ### No Aparecen Drones
@@ -434,8 +569,14 @@ Edita el archivo `flet.json` para personalizar:
 
 - Esperar unos segundos después de iniciar la aplicación para que los drones envíen telemetría
 - Verificar que el servidor HTTP está corriendo: `http://localhost:8765/api/data`
-- Abrir la consola del navegador (F12) para ver errores de JavaScript
-- Verificar que el polling JavaScript está funcionando (deberías ver logs en la consola)
+- Abrir la consola del navegador (F12) para ver logs de depuración:
+  - Deberías ver: `=== SCRIPT DE MAPA CARGADO ===`
+  - Deberías ver: `Mapa listo después de X intentos`
+  - Deberías ver: `=== INICIANDO POLLING DEL SERVIDOR ===`
+  - Deberías ver: `Recibidos X drones del servidor`
+  - Deberías ver: `Creando nuevo marcador para DRONE_XXX`
+- Si no ves estos logs, el script JavaScript puede no estar ejecutándose correctamente
+- Verificar que no hay errores de JavaScript en la consola
 
 ### El Mapa Se Recarga Constantemente
 

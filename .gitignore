@@ -28,15 +28,39 @@ pois.json
 config.json
 *.log
 
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+*.html.tmp
+
+# Map HTML files (temporary)
+map_*.html
+*_map.html
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.cursor/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Python cache
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
 
 

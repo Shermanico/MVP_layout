@@ -311,21 +311,28 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 │ ui/map_view.py::MapView.update_drone()                     │
 │                                                              │
 │ 1. Almacenar telemetría en self.drones[drone_id]           │
+│    - Cache local para referencia rápida                    │
 │                                                              │
 │ 2. Actualizar TelemetryServer                               │
 │    self.telemetry_server.update_telemetry(telemetry)       │
-│    - Actualiza almacén de datos en memoria                  │
-│    - NO regenera HTML (evita recargas)                       │
+│    - Actualiza almacén de datos en memoria (thread-safe)   │
+│    - NO regenera HTML (evita recargas constantes)          │
+│    - Los datos quedan disponibles para JavaScript           │
 │                                                              │
-│ 3. JavaScript en el mapa (polling cada 0.5s)             │
+│ 3. JavaScript en el mapa (polling cada 1 segundo)        │
 │    - Hace fetch a http://localhost:8765/api/data           │
-│    - Recibe JSON con drones y POIs actualizados            │
-│    - Actualiza marcadores existentes usando Leaflet.js      │
-│      * setLatLng() para posición                           │
-│      * setPopupContent() para información                  │
-│      * setIcon() para color según batería                   │
-│    - Crea nuevos marcadores si el dron es nuevo            │
+│    - Recibe JSON: {drones: {...}, pois: {...}}            │
+│    - Para cada dron:                                        │
+│      * Si marcador existe:                                  │
+│        - marker.setLatLng([lat, lon]) para posición       │
+│        - marker.setIcon(nuevo_icono) para color/rotación   │
+│        - marker.setPopupContent(html) para información     │
+│      * Si no existe:                                        │
+│        - Crea nuevo marcador con L.marker()                │
+│        - Agrega icono personalizado (circular con ✈)      │
+│        - Guarda en window.droneMarkers[drone_id]          │
 │    - Preserva zoom y centro usando localStorage             │
+│    - Logs de depuración en consola del navegador           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -333,29 +340,47 @@ Este documento explica el flujo de trabajo completo entre todos los archivos de 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ JavaScript en mapa HTML (cada 0.5 segundos)               │
+│ JavaScript en mapa HTML (cada 1 segundo)                 │
 │                                                              │
-│ 1. setInterval(updateFromServer, 500)                      │
+│ 1. Inicialización (al cargar página)                        │
+│    ├─> waitForMapReady()                                    │
+│    │   - Busca objeto del mapa con findMapObject()          │
+│    │   - Usa múltiples métodos de búsqueda                 │
+│    │   - Cachea referencia en window.mapObject             │
+│    │   - Establece window.mapReady = true cuando está listo│
+│    │                                                          │
+│    └─> Cuando mapa está listo:                              │
+│        - Restaura estado (zoom/centro) desde localStorage  │
+│        - Inicia polling: setInterval(updateFromServer, 1000)│
 │                                                              │
-│ 2. updateFromServer()                                       │
+│ 2. updateFromServer() (cada 1 segundo)                    │
 │    ├─> fetch('http://localhost:8765/api/data')             │
 │    │   - Solicita datos actualizados                        │
+│    │   - Maneja errores de red con try-catch               │
 │    │                                                          │
 │    ├─> Recibe JSON: {drones: {...}, pois: {...}}          │
 │    │                                                          │
 │    ├─> Para cada dron en data.drones:                      │
-│    │   - Si marcador existe: actualizar posición/icono      │
-│    │   - Si no existe: crear nuevo marcador                 │
-│    │   - Actualizar popup con nueva información             │
+│    │   - Valida coordenadas (lat, lon)                      │
+│    │   - Si marcador existe en window.droneMarkers:        │
+│    │     * marker.setLatLng([lat, lon])                     │
+│    │     * marker.setIcon(createDroneIcon(color, heading))  │
+│    │     * marker.setPopupContent(html_info)                │
+│    │   - Si no existe:                                      │
+│    │     * Crea icono circular con emoji ✈                  │
+│    │     * Color según batería (verde/amarillo/rojo)       │
+│    │     * Rotación según heading                           │
+│    │     * Crea marcador: L.marker([lat, lon], {icon})      │
+│    │     * Agrega al mapa: marker.addTo(map)                │
+│    │     * Guarda: window.droneMarkers[drone_id] = marker   │
 │    │                                                          │
 │    └─> Para cada POI en data.pois:                         │
-│        - Si marcador existe: actualizar posición            │
-│        - Si no existe: crear nuevo marcador                  │
-│        - Actualizar popup con información                   │
+│        - Similar proceso para marcadores de POI            │
 │                                                              │
-│ 3. Preservar estado del mapa                                │
-│    - Guardar zoom y centro en localStorage                 │
+│ 3. Preservar estado del mapa                                  │
+│    - Guardar zoom y centro en localStorage periódicamente  │
 │    - Restaurar al cargar la página                          │
+│    - saveMapState() se llama en eventos de zoom/pan        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -495,11 +520,12 @@ ui/main.py
 - **Propósito**: Gestionar visualización de mapa interactivo con actualizaciones incrementales
 - **Responsabilidades**:
   - Crear mapa HTML con Folium o JavaScript puro
-  - Iniciar y gestionar TelemetryServer
+  - Iniciar y gestionar TelemetryServer (puerto 8765)
   - Actualizar TelemetryServer con nuevas telemetrías y POIs
-  - Generar HTML con JavaScript para polling
+  - Inyectar JavaScript para polling y actualización de marcadores
   - Gestionar vista alternativa cuando WebView no está disponible
   - Proporcionar botón para abrir mapa en navegador
+  - Mantener cache local de drones y POIs para referencia rápida
 
 ---
 
@@ -769,10 +795,12 @@ ui/main.py
 - `MapView` usa estrategia diferente según plataforma (WebView vs Fallback)
 - `MapView` usa estrategia diferente según disponibilidad (Folium vs HTML puro)
 
-### 7. **Patrón Polling (Nuevo)**
-- JavaScript en el mapa hace polling al servidor HTTP cada 0.5s
+### 7. **Patrón Polling**
+- JavaScript en el mapa hace polling al servidor HTTP cada 1 segundo
 - Permite actualizaciones incrementales sin recargar la página
 - Evita problemas de recarga constante del mapa
+- El servidor HTTP actúa como intermediario entre Python y JavaScript
+- Los datos se almacenan en memoria (thread-safe) y se sirven como JSON
 
 ### 8. **Patrón Thread-Safe Data Store**
 - `TelemetryDataStore` usa locks para acceso thread-safe
@@ -871,3 +899,13 @@ El sistema sigue una **arquitectura en capas** con actualizaciones incrementales
 Los datos fluyen **hacia arriba** desde los drones a la UI, y **hacia abajo** desde la UI al almacenamiento. Todos los componentes se comunican a través de **callbacks** y **pub/sub** para actualizaciones en tiempo real. El mapa interactivo se actualiza automáticamente con cada telemetría recibida usando un **servidor HTTP interno** y **polling JavaScript**, evitando recargas constantes de la página y proporcionando una experiencia de usuario fluida.
 
 El **TelemetryServer** actúa como intermediario entre el backend Python y el frontend JavaScript, permitiendo actualizaciones incrementales sin regenerar el HTML completo, lo que resuelve el problema de recargas constantes del mapa.
+
+## Scripts de Desarrollo
+
+Para verificar el setup y diagnosticar problemas:
+
+- **`setup.py`** - Setup automático del proyecto (crea venv, instala dependencias)
+- **`setup_check.py`** - Verificación completa: Python, entorno virtual, dependencias, estructura, imports
+- **`diagnostico.py`** - Diagnóstico del sistema en tiempo de ejecución
+
+Ejecutar antes de desarrollar o hacer commit para asegurar que todo esté configurado correctamente.

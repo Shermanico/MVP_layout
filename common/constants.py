@@ -42,3 +42,11 @@ TELEMETRY_FIELDS = [
     "timestamp",
 ]
 
+
+class FlightFormation(str, Enum):
+    """Formaciones de vuelo para cobertura de áreas."""
+    GRID = "grid"  # Formación en cuadrícula para cobertura sistemática
+    LINE = "line"  # Formación en línea para búsqueda lineal
+    CIRCLE = "circle"  # Formación circular para cobertura perimetral
+    SPIRAL = "spiral"  # Formación en espiral para búsqueda centrada
+    ZIGZAG = "zigzag"  # Formación en zigzag para cobertura eficiente

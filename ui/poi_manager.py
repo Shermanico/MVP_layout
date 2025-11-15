@@ -6,7 +6,8 @@ import flet as ft
 from typing import Dict, List, Any, Optional, Callable
 from common.constants import POIType
 from common.colors import (
-    RED, GREEN, BLUE, AMBER, GREY, GREY_600, SURFACE_VARIANT
+    RED, GREEN, BLUE, AMBER, GREY, GREY_600, SURFACE_VARIANT,
+    get_surface_variant_color, get_text_color, get_text_secondary_color
 )
 from common.utils import format_timestamp
 
@@ -18,6 +19,7 @@ class POIManager:
     
     def __init__(
         self,
+        page: Optional[ft.Page] = None,
         on_create_poi: Optional[Callable[[float, float, str, str], None]] = None,
         on_delete_poi: Optional[Callable[[str], None]] = None,
         page_height: int = 900
@@ -26,10 +28,12 @@ class POIManager:
         Inicializa el gestor de POIs.
         
         Args:
+            page: Instancia de página Flet para acceso al tema
             on_create_poi: Callback cuando se crea un POI (lat, lon, type, description)
             on_delete_poi: Callback cuando se elimina un POI (poi_id)
             page_height: Altura de la página para calcular altura del scroll
         """
+        self.page = page
         self.on_create_poi = on_create_poi
         self.on_delete_poi = on_delete_poi
         self.page_height = page_height
@@ -48,10 +52,11 @@ class POIManager:
         # Calcular altura disponible: altura de ventana - padding - encabezado - dividers - botón
         # Aproximadamente: altura total / 2 (mitad para telemetría, mitad para POIs) - espacio fijo
         scroll_height = max(250, (self.page_height - 250) // 2)
+        text_color = get_text_color(self.page) if self.page else "#000000"
         return ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Puntos de Interés", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Text("Puntos de Interés", size=18, weight=ft.FontWeight.BOLD, color=text_color),
                     ft.Divider(),
                     ft.Container(
                         content=self.poi_list_view,
@@ -70,7 +75,7 @@ class POIManager:
             ),
             padding=10,
             width=300,
-            bgcolor=SURFACE_VARIANT,
+            bgcolor=get_surface_variant_color(self.page) if self.page else SURFACE_VARIANT,
             expand=True,
         )
     
@@ -100,6 +105,16 @@ class POIManager:
         }
         type_display = poi_type_names.get(poi_type, poi_type.upper())
         
+        # Colores adaptativos del tema
+        # Asegurar que siempre tengamos un color válido
+        if self.page:
+            text_color = get_text_color(self.page)
+            text_secondary = get_text_secondary_color(self.page)
+        else:
+            # Fallback para cuando no hay página (modo claro por defecto)
+            text_color = "#000000"  # Negro para modo claro
+            text_secondary = GREY_600  # Gris oscuro para modo claro
+        
         return ft.Card(
             content=ft.Container(
                 content=ft.Column(
@@ -116,6 +131,7 @@ class POIManager:
                                     type_display,
                                     weight=ft.FontWeight.BOLD,
                                     size=12,
+                                    color=text_color,
                                 ),
                                 ft.IconButton(
                                     icon=ft.Icons.DELETE,
@@ -126,12 +142,16 @@ class POIManager:
                             ],
                             spacing=5,
                         ),
-                        ft.Text(description or "Sin descripción", size=11),
-                        ft.Text(f"Creado: {timestamp}", size=9, color=GREY_600),
+                        ft.Text(description or "Sin descripción", size=11, color=text_color),
+                        ft.Text(
+                            f"Creado: {timestamp}", 
+                            size=9, 
+                            color=text_secondary
+                        ),
                         ft.Text(
                             f"Lat: {poi['latitude']:.6f}, Lon: {poi['longitude']:.6f}",
                             size=9,
-                            color=GREY_600,
+                            color=text_secondary,
                         ),
                     ],
                     spacing=5,

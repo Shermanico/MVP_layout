@@ -37,12 +37,12 @@ async def main(page: ft.Page):
         storage = POIStorage(config.poi_storage_file)
         logger.info("Almacenamiento de POIs inicializado")
         
-        # Inicializar UI
-        app = MainApp(config, storage)
+        # Inicializar UI primero (sin drone_manager todavía)
+        app = MainApp(config, storage, drone_manager=None)
         app.setup_page(page)
         logger.info("UI inicializada")
         
-        # Inicializar gestor de drones
+        # Crear callback de telemetría que usa app (ahora ya existe)
         def on_telemetry_update(telemetry):
             """Maneja actualizaciones de telemetría de los drones."""
             try:
@@ -60,21 +60,35 @@ async def main(page: ft.Page):
                 
                 # Transmitir vía pub/sub (si es necesario para multi-cliente)
                 try:
-                    page.pubsub.send_all(
-                        message={
-                            "action": "telemetry_update",
-                            "telemetry": telemetry,
-                        },
-                        topic=CHANNEL_TELEMETRY,
-                    )
+                    # Intentar usar la API correcta de Flet pub/sub
+                    if hasattr(page.pubsub, 'send_all_on_topic'):
+                        page.pubsub.send_all_on_topic(
+                            topic=CHANNEL_TELEMETRY,
+                            message={
+                                "action": "telemetry_update",
+                                "telemetry": telemetry,
+                            }
+                        )
+                    else:
+                        # Fallback: intentar sin topic o ignorar si falla
+                        page.pubsub.send_all(
+                            message={
+                                "action": "telemetry_update",
+                                "telemetry": telemetry,
+                            }
+                        )
                 except Exception as e:
                     logger.debug(f"Error en pub/sub (puede ignorarse): {e}")
                 
             except Exception as e:
                 logger.error(f"Error al actualizar telemetría: {e}", exc_info=True)
         
+        # Inicializar gestor de drones con el callback
         drone_manager = DroneManager(config, on_telemetry_update)
         logger.info("Gestor de drones inicializado")
+        
+        # Asignar drone_manager a app después de crearlo
+        app.drone_manager = drone_manager
         
         # Iniciar simulación de drones en segundo plano
         async def run_drones():
@@ -124,8 +138,38 @@ async def main(page: ft.Page):
 
 
 def run_app():
-    """Ejecuta la aplicación Flet."""
+    """Ejecuta la aplicación Flet en modo desktop."""
     ft.app(target=main)
+
+
+def run_web():
+    """Ejecuta la aplicación Flet en modo web."""
+    import socket
+    
+    def get_local_ip():
+        """Obtiene la IP local de la máquina."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+    
+    local_ip = get_local_ip()
+    print("=" * 60)
+    print("Servidor web iniciando...")
+    print(f"Acceso local: http://localhost:8550")
+    print(f"Acceso desde red local: http://{local_ip}:8550")
+    print("=" * 60)
+    
+    ft.app(
+        target=main,
+        view=ft.AppView.WEB_BROWSER,
+        port=8550,
+        host="0.0.0.0"  # Escucha en todas las interfaces
+    )
 
 
 if __name__ == "__main__":

@@ -3,11 +3,12 @@ Componente de panel de visualización de telemetría.
 Muestra telemetría en tiempo real para todos los drones.
 """
 import flet as ft
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from common.utils import format_timestamp
 from common.colors import (
     RED, GREEN, BLUE, AMBER, GREY, GREY_300, GREY_600, 
-    BLUE_700, SURFACE_VARIANT
+    BLUE_700, SURFACE_VARIANT,
+    get_surface_variant_color, get_text_color, get_text_secondary_color
 )
 
 
@@ -16,13 +17,15 @@ class TelemetryPanel:
     Componente UI para mostrar telemetría de drones.
     """
     
-    def __init__(self, page_height: int = 900):
+    def __init__(self, page: Optional[ft.Page] = None, page_height: int = 900):
         """
         Inicializa el panel de telemetría.
         
         Args:
+            page: Instancia de página Flet para acceso al tema
             page_height: Altura de la página para calcular altura del scroll
         """
+        self.page = page
         self.drones: Dict[str, Dict[str, Any]] = {}
         self.page_height = page_height
         # Crear Column con scroll para contenido scrolleable
@@ -37,14 +40,16 @@ class TelemetryPanel:
     def _create_panel(self) -> ft.Container:
         """Crea el panel de telemetría."""
         # Crear el texto de drones activos como atributo para poder actualizarlo
-        self.active_drones_text = ft.Text(f"Drones Activos: {len(self.drones)}", size=12, color=GREY_600)
+        text_color = get_text_color(self.page) if self.page else "#000000"
+        text_secondary = get_text_secondary_color(self.page) if self.page else GREY_600
+        self.active_drones_text = ft.Text(f"Drones Activos: {len(self.drones)}", size=12, color=text_secondary)
         return ft.Container(
             content=ft.Column(
                 controls=[
                     ft.Container(
                         content=ft.Column(
                             controls=[
-                                ft.Text("Telemetría de Drones", size=18, weight=ft.FontWeight.BOLD),
+                                ft.Text("Telemetría de Drones", size=18, weight=ft.FontWeight.BOLD, color=text_color),
                                 ft.Divider(),
                                 self.active_drones_text,
                             ],
@@ -63,7 +68,7 @@ class TelemetryPanel:
             ),
             padding=10,
             width=300,
-            bgcolor=SURFACE_VARIANT,
+            bgcolor=get_surface_variant_color(self.page) if self.page else SURFACE_VARIANT,
             expand=True,
         )
     
@@ -108,16 +113,26 @@ class TelemetryPanel:
         }
         status_text = status_translations.get(status.lower(), status.upper())
         
+        # Colores adaptativos del tema
+        # Asegurar que siempre tengamos un color válido
+        if self.page:
+            text_color = get_text_color(self.page)
+            text_secondary = get_text_secondary_color(self.page)
+        else:
+            # Fallback para cuando no hay página (modo claro por defecto)
+            text_color = "#000000"  # Negro para modo claro
+            text_secondary = GREY_600  # Gris oscuro para modo claro
+        
         controls = [
             ft.Row(
                 controls=[
-                    ft.Icon(ft.Icons.FLIGHT_TAKEOFF, size=20),
-                    ft.Text(drone_id, weight=ft.FontWeight.BOLD, size=14),
+                    ft.Icon(ft.Icons.FLIGHT_TAKEOFF, size=20, color=text_color),
+                    ft.Text(drone_id, weight=ft.FontWeight.BOLD, size=14, color=text_color),
                     ft.Container(
                         content=ft.Row(
                             controls=[
                                 ft.Icon(ft.Icons.SATELLITE_ALT, size=14, color=GREEN if rtk_fix else GREY),
-                                ft.Text("RTK" if rtk_fix else "GPS", size=9, color=GREY_600),
+                                ft.Text("RTK" if rtk_fix else "GPS", size=9, color=text_secondary),
                             ],
                             spacing=2,
                         ),
@@ -128,12 +143,12 @@ class TelemetryPanel:
             ft.Divider(height=1),
             ft.Row(
                 controls=[
-                    ft.Text("Batería:", size=11),
+                    ft.Text("Batería:", size=11, color=text_color),
                     ft.Container(
                         content=ft.ProgressBar(
                             value=battery / 100,
                             color=battery_color,
-                            bgcolor=GREY_300,
+                            bgcolor=ft.Colors.SURFACE if self.page and self.page.theme_mode == ft.ThemeMode.DARK else GREY_300,
                         ),
                         width=100,
                         height=10,
@@ -142,10 +157,10 @@ class TelemetryPanel:
                 ],
                 spacing=5,
             ),
-            ft.Text(f"Estado: {status_text.upper()}", size=11),
-            ft.Text(f"Altitud: {altitude:.1f} m AGL", size=11),
-            ft.Text(f"Velocidad: {velocity:.1f} m/s ({velocity * 3.6:.1f} km/h)", size=11),
-            ft.Text(f"Rumbo: {heading:.1f}°", size=11),
+            ft.Text(f"Estado: {status_text.upper()}", size=11, color=text_color),
+            ft.Text(f"Altitud: {altitude:.1f} m AGL", size=11, color=text_color),
+            ft.Text(f"Velocidad: {velocity:.1f} m/s ({velocity * 3.6:.1f} km/h)", size=11, color=text_color),
+            ft.Text(f"Rumbo: {heading:.1f}°", size=11, color=text_color),
         ]
         
         # Agregar velocidad vertical si está disponible
@@ -155,7 +170,7 @@ class TelemetryPanel:
                 ft.Row(
                     controls=[
                         ft.Icon(vertical_icon, size=12, color=BLUE),
-                        ft.Text(f"Vertical: {vertical_speed:.1f} m/s", size=10),
+                        ft.Text(f"Vertical: {vertical_speed:.1f} m/s", size=10, color=text_color),
                     ],
                     spacing=3,
                 )
@@ -164,11 +179,11 @@ class TelemetryPanel:
         # Agregar tiempo de vuelo restante
         if flight_time_remaining > 0:
             controls.append(
-                ft.Text(f"Tiempo de vuelo: {time_str}", size=10, color=BLUE_700)
+                ft.Text(f"Tiempo de vuelo: {time_str}", size=10, color=BLUE)
             )
         
         controls.append(
-            ft.Text(f"Posición: {lat:.6f}, {lon:.6f}", size=9, color=GREY_600)
+            ft.Text(f"Posición: {lat:.6f}, {lon:.6f}", size=9, color=text_secondary)
         )
         
         return ft.Card(
@@ -232,6 +247,11 @@ class TelemetryPanel:
         # Actualizar contador de drones activos (usar el atributo en lugar de buscar en controls)
         if hasattr(self, 'active_drones_text'):
             self.active_drones_text.value = f"Drones Activos: {len(self.drones)}"
+            # Actualizar color si la página está disponible
+            if self.page:
+                self.active_drones_text.color = get_text_secondary_color(self.page)
+                # También actualizar el color del título si existe
+                # (esto se hace automáticamente con los nuevos cards que se crean)
         
         try:
             self.drone_list_view.update()
